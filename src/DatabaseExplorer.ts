@@ -294,7 +294,10 @@ export class DatabaseExplorer {
                 }
 
                 td {
-                    word-break: break-word;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    max-width: 300px;
                 }
 
                 .column-filter {
