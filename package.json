@@ -2,7 +2,7 @@
     "name": "database-viewer",
     "displayName": "Database Viewer",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "0.0.165",
+    "version": "0.0.172",
     "publisher": "mmoussa",
     "icon": "icon.png",
     "categories": [
@@ -92,26 +92,26 @@
         "keybindings": [
             {
                 "command": "databaseViewer.addSQLite",
-                "key": "ctrl+shift+d",
-                "mac": "cmd+shift+d",
+                "key": "ctrl+shift+alt+d",
+                "mac": "cmd+shift+alt+d",
                 "when": "view == databaseExplorer"
             },
             {
                 "command": "databaseViewer.addMongoDB",
-                "key": "ctrl+shift+m",
-                "mac": "cmd+shift+m",
+                "key": "ctrl+shift+alt+m",
+                "mac": "cmd+shift+alt+m",
                 "when": "view == databaseExplorer"
             },
             {
                 "command": "databaseViewer.refresh",
-                "key": "ctrl+r",
-                "mac": "cmd+r",
+                "key": "ctrl+shift+alt+r",
+                "mac": "cmd+shift+alt+r",
                 "when": "view == databaseExplorer"
             },
             {
                 "command": "databaseViewer.openSQLiteFile",
-                "key": "ctrl+alt+d",
-                "mac": "cmd+alt+d"
+                "key": "ctrl+shift+alt+o",
+                "mac": "cmd+shift+alt+o"
             }
         ],
         "fileAssociations": [
