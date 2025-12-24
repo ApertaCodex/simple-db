@@ -3,7 +3,7 @@
     "displayName": "Database Viewer",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
     "version": "0.0.163",
-    "publisher": "apertacodex",
+    "publisher": "m-moussa",
     "engines": {
         "vscode": "^1.85.0"
     },
