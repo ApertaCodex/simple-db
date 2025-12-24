@@ -1,5 +1,10 @@
 # Database Viewer
 
+[![Version](https://img.shields.io/visual-studio-marketplace/v/mmoussa.database-viewer?style=flat-square&label=Version)](https://marketplace.visualstudio.com/items?itemName=mmoussa.database-viewer)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/mmoussa.database-viewer?style=flat-square&label=Installs)](https://marketplace.visualstudio.com/items?itemName=mmoussa.database-viewer)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/mmoussa.database-viewer?style=flat-square&label=Rating)](https://marketplace.visualstudio.com/items?itemName=mmoussa.database-viewer)
+[![License](https://img.shields.io/github/license/ApertaCodex/database-viewer?style=flat-square&label=License)](https://github.com/ApertaCodex/database-viewer/blob/master/LICENSE)
+
 A powerful VS Code extension for viewing, filtering, and exploring SQLite and MongoDB databases with an intuitive interface and smart filtering capabilities.
 
 ## ✨ Features
@@ -88,3 +93,57 @@ The extension stores database connections in VS Code settings under `databaseVie
 
 - `npm run compile`: Compile TypeScript to JavaScript
 - `npm run watch`: Watch for changes and recompile automatically
+
+## 📝 Changelog
+
+### [0.0.164] - 2024-12-24
+
+**Added:**
+- Database icon for marketplace listing
+- 3 professional screenshots showcasing features
+- Enhanced README with badges and better documentation
+- Categories and keywords for improved discoverability
+
+**Improved:**
+- Smart filter UI with search button icon (🔍)
+- Date filters now support ranges and comparison operators
+- Number filters support multiple operator types
+- Filter help text shows supported operators
+
+### [0.0.163] - 2024-12-24
+
+**Added:**
+- Smart filtering system with operator support
+- Number filters: `>`, `<`, `>=`, `<=`, `=`, `!=`, ranges
+- Date filters: comparison operators and date ranges
+- Filter submission via Enter key or button click
+- Per-column filter inputs with type detection
+
+**Improved:**
+- Filter UI with dedicated input fields per column
+- Better filter user experience with visual feedback
+
+### [0.0.1] - Initial Release
+
+**Added:**
+- SQLite database support (.db, .sqlite, .sqlite3)
+- MongoDB connection support
+- Interactive data grid with pagination
+- Column sorting (ascending/descending)
+- Global search across all columns
+- Tree view explorer for databases and tables
+- Persistent connection storage
+- Auto-open SQLite files on click
+- Syntax highlighting for different data types
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Feel free to submit issues and pull requests on [GitHub](https://github.com/ApertaCodex/database-viewer).
+
+## 💬 Support
+
+If you encounter any issues or have suggestions, please [open an issue](https://github.com/ApertaCodex/database-viewer/issues) on GitHub.
