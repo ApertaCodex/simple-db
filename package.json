@@ -1,0 +1,204 @@
+{
+    "name": "database-viewer",
+    "displayName": "Database Viewer",
+    "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
+    "version": "0.0.163",
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/apertacodex/database-viewer"
+    },
+    "activationEvents": [
+        "onStartupFinished",
+        "onView:databaseExplorer",
+        "onCommand:databaseViewer.addSQLite",
+        "onCommand:databaseViewer.addMongoDB",
+        "onCommand:databaseViewer.refresh",
+        "onCommand:databaseViewer.openSQLiteFile",
+        "onCommand:databaseViewer.viewData",
+        "onCommand:databaseViewer.removeConnection"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "views": {
+            "database-viewer": [
+                {
+                    "id": "databaseExplorer",
+                    "name": "Database Explorer",
+                    "when": "true",
+                    "icon": "$(database)"
+                }
+            ]
+        },
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "database-viewer",
+                    "title": "Database Viewer",
+                    "icon": "$(database)"
+                }
+            ]
+        },
+        "commands": [
+            {
+                "command": "databaseViewer.addSQLite",
+                "title": "Add SQLite Database",
+                "icon": "$(database)"
+            },
+            {
+                "command": "databaseViewer.addMongoDB",
+                "title": "Add MongoDB Connection",
+                "icon": "$(server)"
+            },
+            {
+                "command": "databaseViewer.refresh",
+                "title": "Refresh",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "databaseViewer.removeConnection",
+                "title": "Remove Connection"
+            },
+            {
+                "command": "databaseViewer.viewData",
+                "title": "View Data"
+            },
+            {
+                "command": "databaseViewer.openSQLiteFile",
+                "title": "Open SQLite Database",
+                "icon": "$(database)"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "databaseViewer.addSQLite",
+                "key": "ctrl+shift+d",
+                "mac": "cmd+shift+d",
+                "when": "view == databaseExplorer"
+            },
+            {
+                "command": "databaseViewer.addMongoDB",
+                "key": "ctrl+shift+m",
+                "mac": "cmd+shift+m",
+                "when": "view == databaseExplorer"
+            },
+            {
+                "command": "databaseViewer.refresh",
+                "key": "ctrl+r",
+                "mac": "cmd+r",
+                "when": "view == databaseExplorer"
+            },
+            {
+                "command": "databaseViewer.openSQLiteFile",
+                "key": "ctrl+alt+d",
+                "mac": "cmd+alt+d"
+            }
+        ],
+        "fileAssociations": [
+            {
+                "pattern": "**/*.db",
+                "scheme": "file"
+            },
+            {
+                "pattern": "**/*.sqlite",
+                "scheme": "file"
+            },
+            {
+                "pattern": "**/*.sqlite3",
+                "scheme": "file"
+            }
+        ],
+        "menus": {
+            "view/title": [
+                {
+                    "command": "databaseViewer.addSQLite",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "databaseViewer.addMongoDB",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "databaseViewer.refresh",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "databaseViewer.removeConnection",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "inline"
+                },
+                {
+                    "command": "databaseViewer.viewData",
+                    "when": "view == databaseExplorer && viewItem == table",
+                    "group": "inline"
+                }
+            ],
+            "explorer/context": [
+                {
+                    "command": "databaseViewer.openSQLiteFile",
+                    "when": "resourceExtname == .db || resourceExtname == .sqlite || resourceExtname == .sqlite3",
+                    "group": "database"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "Database Viewer",
+            "properties": {
+                "databaseViewer.connections": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Database connections configuration",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Connection name"
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "sqlite",
+                                    "mongodb"
+                                ],
+                                "description": "Database type"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Database file path (SQLite) or connection string (MongoDB)"
+                            }
+                        }
+                    }
+                },
+                "databaseViewer.autoOpenSQLiteFiles": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically open SQLite database files when they are opened in the editor"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "build": "npm run compile && vsce package",
+        "version": "npm version patch && npm run build"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.85.0",
+        "@types/node": "18.x",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "sqlite3": "^5.1.6",
+        "mongoose": "^8.0.3"
+    }
+}
