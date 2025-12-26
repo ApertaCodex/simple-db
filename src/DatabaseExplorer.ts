@@ -240,7 +240,7 @@ export class DatabaseExplorer {
                 .search input {
                     width: 100%;
                     max-width: 400px;
-                    padding: 8px 12px;
+                    padding: 8px 12px 8px 36px;
                     background-color: var(--bg-secondary);
                     border: 1px solid var(--border-color);
                     border-radius: 4px;
@@ -248,6 +248,16 @@ export class DatabaseExplorer {
                     font-size: 13px;
                     outline: none;
                     transition: border-color 0.2s;
+                }
+
+                .search-icon {
+                    position: absolute;
+                    left: 12px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    color: var(--text-secondary);
+                    pointer-events: none;
+                    z-index: 1;
                 }
 
                 .search input:focus {
@@ -262,17 +272,18 @@ export class DatabaseExplorer {
                     background-color: var(--bg-secondary);
                     border: 1px solid var(--border-color);
                     border-radius: 4px;
-                    overflow: hidden;
+                    overflow: auto;
+                    max-height: 70vh;
                 }
 
                 table {
                     border-collapse: collapse;
-                    width: 100%;
+                    min-width: 100%;
                     font-size: 12px;
                 }
 
                 th, td {
-                    padding: 8px 12px;
+                    padding: 12px 16px;
                     text-align: left;
                     border-bottom: 1px solid var(--border-color);
                     vertical-align: top;
@@ -282,6 +293,7 @@ export class DatabaseExplorer {
                     background-color: var(--header-bg);
                     color: var(--text-primary);
                     font-weight: 600;
+                    font-size: 14px;
                     cursor: pointer;
                     user-select: none;
                     position: sticky;
@@ -291,6 +303,7 @@ export class DatabaseExplorer {
                     position: relative;
                     padding-bottom: 0;
                     white-space: nowrap;
+                    height: 44px;
                 }
 
                 td {
@@ -435,8 +448,75 @@ export class DatabaseExplorer {
                     color: var(--accent);
                 }
 
+                .header-search-icon {
+                    color: var(--text-secondary);
+                    opacity: 0.5;
+                    transition: all 0.2s;
+                    cursor: pointer;
+                }
+
+                .header-search-icon:hover {
+                    opacity: 0.8;
+                    color: var(--accent);
+                }
+
+                th:hover .header-search-icon {
+                    opacity: 0.8;
+                    color: var(--accent);
+                }
+
                 th:hover {
                     background-color: var(--bg-tertiary);
+                }
+
+                th.sort-asc {
+                    background-color: var(--accent);
+                    color: white;
+                }
+
+                th.sort-desc {
+                    background-color: var(--accent);
+                    color: white;
+                }
+
+                .sort-indicator {
+                    margin-left: 8px;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 2px;
+                }
+
+                .sort-indicator svg {
+                    width: 16px;
+                    height: 16px;
+                    color: var(--accent);
+                    opacity: 0.8;
+                }
+
+                .sort-priority {
+                    font-size: 10px;
+                    font-weight: bold;
+                    color: var(--accent);
+                    background-color: rgba(0, 122, 204, 0.1);
+                    border-radius: 50%;
+                    width: 14px;
+                    height: 14px;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    line-height: 1;
+                }
+
+                th.sort-asc .sort-indicator svg,
+                th.sort-desc .sort-indicator svg {
+                    color: white;
+                    opacity: 1;
+                }
+
+                th.sort-asc .sort-priority,
+                th.sort-desc .sort-priority {
+                    background-color: rgba(255, 255, 255, 0.2);
+                    color: white;
                 }
 
                 th:first-child,
@@ -541,6 +621,10 @@ export class DatabaseExplorer {
             <h2>${tableName}</h2>
             <div class="stats">Showing ${data.length} rows</div>
             <div class="search">
+                <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m21 21-4.34-4.34"/>
+                    <circle cx="11" cy="11" r="8"/>
+                </svg>
                 <input type="text" id="searchInput" placeholder="Search..." onkeyup="filterTable()">
             </div>
             <div class="table-container">
@@ -585,10 +669,13 @@ export class DatabaseExplorer {
                                 }
 
                                 return `
-                                <th onclick="sortTable(${idx})" oncontextmenu="event.preventDefault(); toggleColumnFilter(${idx})">
+                                <th onclick="sortTable(${idx}, event)" oncontextmenu="event.preventDefault(); toggleColumnFilter(${idx})">
                                     <span style="display: flex; align-items: center; justify-content: space-between;">
                                         <span>${col}</span>
-                                        <span class="filter-icon" onclick="event.stopPropagation(); toggleColumnFilter(${idx})" title="Click to filter this column"></span>
+                                        <svg class="header-search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" title="Click to filter this column" onclick="event.stopPropagation(); toggleColumnFilter(${idx})">
+                                            <path d="m21 21-4.34-4.34"/>
+                                            <circle cx="11" cy="11" r="8"/>
+                                        </svg>
                                     </span>
                                     <div class="column-filter" id="filter-${idx}">
                                         ${filterInput}
@@ -618,8 +705,7 @@ export class DatabaseExplorer {
                 const columns = ${JSON.stringify(columns)};
                 let currentPage = 1;
                 const rowsPerPage = 50;
-                let sortColumn = -1;
-                let sortDirection = 1;
+                let sortColumns = []; // Array of {columnIndex, direction} for multi-sort
                 let filteredData = [...data];
                 let columnFilters = {};
 
@@ -831,23 +917,138 @@ export class DatabaseExplorer {
                     applyFilters(globalSearch);
                 }
 
-                function sortTable(columnIndex) {
-                    if (sortColumn === columnIndex) {
-                        sortDirection *= -1;
+                function sortTable(columnIndex, event) {
+                    const isShiftPressed = event && event.shiftKey;
+                    
+                    if (isShiftPressed) {
+                        // Multi-column sorting with Shift
+                        const existingSortIndex = sortColumns.findIndex(s => s.columnIndex === columnIndex);
+                        
+                        if (existingSortIndex !== -1) {
+                            const currentDirection = sortColumns[existingSortIndex].direction;
+                            if (currentDirection === 1) {
+                                // asc -> desc
+                                sortColumns[existingSortIndex].direction = -1;
+                            } else {
+                                // desc -> remove
+                                sortColumns.splice(existingSortIndex, 1);
+                            }
+                        } else {
+                            // Add new column to sort
+                            sortColumns.push({ columnIndex, direction: 1 });
+                        }
                     } else {
-                        sortColumn = columnIndex;
-                        sortDirection = 1;
+                        // Single column sorting (normal click)
+                        if (sortColumns.length === 1 && sortColumns[0].columnIndex === columnIndex) {
+                            const currentDirection = sortColumns[0].direction;
+                            if (currentDirection === 1) {
+                                // asc -> desc
+                                sortColumns[0].direction = -1;
+                            } else {
+                                // desc -> unsort
+                                sortColumns = [];
+                            }
+                        } else {
+                            // New single column sort
+                            sortColumns = [{ columnIndex, direction: 1 }];
+                        }
                     }
                     
+                    applySorting();
+                    updateSortIndicators();
+                    renderTable();
+                }
+                
+                function applySorting() {
+                    if (sortColumns.length === 0) return;
+                    
                     filteredData.sort((a, b) => {
-                        const aVal = a[columns[columnIndex]];
-                        const bVal = b[columns[columnIndex]];
-                        if (aVal < bVal) return -sortDirection;
-                        if (aVal > bVal) return sortDirection;
+                        for (const sort of sortColumns) {
+                            const { columnIndex, direction } = sort;
+                            const colName = columns[columnIndex];
+                            const aVal = a[colName];
+                            const bVal = b[colName];
+                            
+                            let comparison = 0;
+                            if (aVal === null || aVal === undefined) {
+                                comparison = (bVal === null || bVal === undefined) ? 0 : -1;
+                            } else if (bVal === null || bVal === undefined) {
+                                comparison = 1;
+                            } else {
+                                comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+                            }
+                            
+                            if (comparison !== 0) {
+                                return comparison * direction;
+                            }
+                        }
                         return 0;
                     });
+                }
+                
+                function updateSortIndicators() {
+                    // Clear all sort indicators
+                    document.querySelectorAll('th').forEach((th, index) => {
+                        th.classList.remove('sort-asc', 'sort-desc');
+                        const existingIndicator = th.querySelector('.sort-indicator');
+                        if (existingIndicator) {
+                            existingIndicator.remove();
+                        }
+                    });
                     
-                    renderTable();
+                    // Add sort indicators for sorted columns
+                    sortColumns.forEach((sort, index) => {
+                        const { columnIndex, direction } = sort;
+                        const th = document.querySelectorAll('th')[columnIndex];
+                        if (th) {
+                            th.classList.add(direction === 1 ? 'sort-asc' : 'sort-desc');
+                            
+                            // Add sort indicator icon
+                            const indicator = document.createElement('span');
+                            indicator.className = 'sort-indicator';
+                            
+                            // Create SVG icon
+                            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                            svg.setAttribute('width', '16');
+                            svg.setAttribute('height', '16');
+                            svg.setAttribute('viewBox', '0 0 24 24');
+                            svg.setAttribute('fill', 'none');
+                            svg.setAttribute('stroke', 'currentColor');
+                            svg.setAttribute('stroke-width', '2');
+                            svg.setAttribute('stroke-linecap', 'round');
+                            svg.setAttribute('stroke-linejoin', 'round');
+                            
+                            if (direction === 1) {
+                                // Arrow up for ascending
+                                const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                path1.setAttribute('d', 'm5 12 7-7 7 7');
+                                const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                path2.setAttribute('d', 'M12 19V5');
+                                svg.appendChild(path1);
+                                svg.appendChild(path2);
+                            } else {
+                                // Arrow down for descending
+                                const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                path1.setAttribute('d', 'M12 5v14');
+                                const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                path2.setAttribute('d', 'm19 12-7 7-7-7');
+                                svg.appendChild(path1);
+                                svg.appendChild(path2);
+                            }
+                            
+                            indicator.appendChild(svg);
+                            
+                            if (index > 0) {
+                                const priority = document.createElement('span');
+                                priority.className = 'sort-priority';
+                                priority.textContent = index + 1;
+                                priority.title = 'Sort priority ' + (index + 1);
+                                indicator.appendChild(priority);
+                            }
+                            
+                            th.querySelector('span').appendChild(indicator);
+                        }
+                    });
                 }
 
                 function renderTable() {

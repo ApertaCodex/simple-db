@@ -2,7 +2,7 @@
     "name": "database-viewer",
     "displayName": "Database Viewer",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "0.0.185",
+    "version": "0.0.200",
     "publisher": "mmoussa",
     "icon": "icon.png",
     "categories": [
