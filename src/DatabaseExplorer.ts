@@ -5,7 +5,8 @@ import { SQLiteManager } from './SQLiteManager';
 import { MongoDBManager } from './MongoDBManager';
 
 export class DatabaseExplorer {
-    private connections: DatabaseItem[] = [];
+    connections: DatabaseItem[] = [];
+    private _disposables: vscode.Disposable[] = [];
     private _treeDataProvider: DatabaseTreeDataProvider;
 
     constructor(private sqliteManager: SQLiteManager, private mongoManager: MongoDBManager) {
@@ -105,6 +106,26 @@ export class DatabaseExplorer {
         }
     }
 
+    async refreshTables(connection: DatabaseItem) {
+        try {
+            if (connection.type === 'mongodb') {
+                const collections = await this.mongoManager.getCollections(connection.path);
+                connection.tables = collections;
+                this.saveConnections();
+                this._treeDataProvider.refresh();
+                vscode.window.showInformationMessage(`Collections refreshed for "${connection.name}"`);
+            } else if (connection.type === 'sqlite') {
+                const tables = await this.sqliteManager.getTables(connection.path);
+                connection.tables = tables;
+                this.saveConnections();
+                this._treeDataProvider.refresh();
+                vscode.window.showInformationMessage(`Tables refreshed for "${connection.name}"`);
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to refresh tables/collections: ${error}`);
+        }
+    }
+
     async removeConnection(item: DatabaseTreeItem) {
         const index = this.connections.findIndex(c => c.name === item.connection.name);
         if (index !== -1) {
@@ -130,6 +151,43 @@ export class DatabaseExplorer {
         }
     }
 
+    async openQueryConsole(item: DatabaseTreeItem) {
+        try {
+            let data;
+            if (item.connection.type === 'sqlite') {
+                data = await this.sqliteManager.getTableData(item.connection.path, item.label);
+            } else {
+                data = await this.mongoManager.getCollectionData(item.connection.path, item.label);
+            }
+
+            this.showQueryConsole(data, item.label, item.connection.path);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to open query console: ${error}`);
+        }
+    }
+
+    private async executeQuery(dbPath: string, query: string): Promise<any> {
+        try {
+            // For now, we'll use SQLite manager to execute queries
+            // This is a simplified implementation
+            const sqlite3 = require('sqlite3').verbose();
+            const db = new sqlite3.Database(dbPath);
+            
+            return new Promise((resolve, reject) => {
+                db.all(query, [], (err: any, rows: any[]) => {
+                    db.close();
+                    if (err) {
+                        reject(err);
+                    } else {
+                        resolve({ data: rows });
+                    }
+                });
+            });
+        } catch (error) {
+            throw new Error(`Query execution failed: ${error}`);
+        }
+    }
+
     private showDataGrid(data: any[], tableName: string) {
         const panel = vscode.window.createWebviewPanel(
             'dataGrid',
@@ -139,6 +197,34 @@ export class DatabaseExplorer {
         );
 
         panel.webview.html = this.getDataGridHtml(data, tableName);
+    }
+
+    private showQueryConsole(data: any[], tableName: string, dbPath: string) {
+        const panel = vscode.window.createWebviewPanel(
+            'queryConsole',
+            `SQL Query: ${tableName}`,
+            vscode.ViewColumn.Two,
+            { enableScripts: true, retainContextWhenHidden: true }
+        );
+
+        panel.webview.html = this.getQueryConsoleHtml(data, tableName, dbPath);
+        
+        // Handle messages from webview
+        panel.webview.onDidReceiveMessage(
+            message => {
+                switch (message.command) {
+                    case 'executeQuery':
+                        this.executeQuery(dbPath, message.query).then(result => {
+                            panel.webview.postMessage({ command: 'queryResult', data: result });
+                        }).catch(error => {
+                            panel.webview.postMessage({ command: 'queryError', error: error.toString() });
+                        });
+                        break;
+                }
+            },
+            undefined,
+            this._disposables
+        );
     }
 
     private getCellClass(value: any): string {
@@ -162,6 +248,312 @@ export class DatabaseExplorer {
             }
         }
         return String(value);
+    }
+
+    private getQueryConsoleHtml(data: any[], tableName: string, dbPath: string): string {
+        return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>SQL Query Console - ${tableName}</title>
+            <style>
+                :root {
+                    --bg-primary: #1e1e1e;
+                    --bg-secondary: #252526;
+                    --bg-tertiary: #2d2d30;
+                    --border-color: #3e3e42;
+                    --text-primary: #cccccc;
+                    --text-secondary: #969696;
+                    --accent: #007acc;
+                    --accent-hover: #1a8ad6;
+                    --row-hover: #2a2d2e;
+                    --header-bg: #333333;
+                    --input-bg: #3c3c3c;
+                }
+
+                * {
+                    box-sizing: border-box;
+                    margin: 0;
+                    padding: 0;
+                }
+
+                body {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    background-color: var(--bg-primary);
+                    color: var(--text-primary);
+                    font-size: 13px;
+                    line-height: 1.4;
+                    height: 100vh;
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                }
+
+                .console-container {
+                    display: flex;
+                    flex-direction: column;
+                    height: 100%;
+                }
+
+                .console-header {
+                    background-color: var(--bg-secondary);
+                    border-bottom: 1px solid var(--border-color);
+                    padding: 12px 16px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-shrink: 0;
+                }
+
+                .console-title {
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: var(--text-primary);
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                }
+
+                .console-controls {
+                    display: flex;
+                    gap: 8px;
+                }
+
+                .console-btn {
+                    background-color: var(--accent);
+                    color: white;
+                    border: none;
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 12px;
+                    font-weight: 500;
+                    transition: background-color 0.2s;
+                }
+
+                .console-btn:hover {
+                    background-color: var(--accent-hover);
+                }
+
+                .console-btn-secondary {
+                    background-color: var(--bg-tertiary);
+                    color: var(--text-primary);
+                    border: 1px solid var(--border-color);
+                }
+
+                .console-btn-secondary:hover {
+                    background-color: var(--row-hover);
+                }
+
+                .query-editor {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    min-height: 0;
+                    overflow: hidden;
+                    transition: min-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                }
+
+                .query-editor.expanded {
+                    min-height: 200px;
+                }
+
+                .query-textarea {
+                    flex: 1;
+                    background-color: var(--input-bg);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-primary);
+                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                    font-size: 12px;
+                    padding: 12px;
+                    border-radius: 4px;
+                    resize: none;
+                    outline: none;
+                    line-height: 1.5;
+                }
+
+                .query-textarea:focus {
+                    border-color: var(--accent);
+                }
+
+                .query-textarea::placeholder {
+                    color: var(--text-secondary);
+                }
+
+                .results-container {
+                    flex: 1;
+                    background-color: var(--bg-primary);
+                    overflow: auto;
+                    border-top: 1px solid var(--border-color);
+                }
+
+                .results-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 12px;
+                }
+
+                .results-table th,
+                .results-table td {
+                    padding: 8px 12px;
+                    text-align: left;
+                    border-bottom: 1px solid var(--border-color);
+                    vertical-align: top;
+                }
+
+                .results-table th {
+                    background-color: var(--header-bg);
+                    color: var(--text-primary);
+                    font-weight: 600;
+                    position: sticky;
+                    top: 0;
+                    z-index: 10;
+                }
+
+                .results-table tr:hover td {
+                    background-color: var(--row-hover);
+                }
+
+                .error-message {
+                    color: #ff6b6b;
+                    background-color: rgba(255, 107, 107, 0.1);
+                    padding: 12px;
+                    border-radius: 4px;
+                    border: 1px solid rgba(255, 107, 107, 0.2);
+                    margin: 12px;
+                }
+
+                .loading {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 20px;
+                    color: var(--text-secondary);
+                }
+
+                ::-webkit-scrollbar {
+                    width: 12px;
+                    height: 12px;
+                }
+
+                ::-webkit-scrollbar-track {
+                    background: var(--bg-primary);
+                }
+
+                ::-webkit-scrollbar-thumb {
+                    background: var(--border-color);
+                    border-radius: 6px;
+                }
+
+                ::-webkit-scrollbar-thumb:hover {
+                    background: #555555;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="console-container">
+                <div class="console-header">
+                    <div class="console-title">SQL Query Console</div>
+                    <div class="console-controls">
+                        <button class="console-btn console-btn-secondary" onclick="clearQuery()">Clear</button>
+                        <button class="console-btn" onclick="executeQuery()">Execute</button>
+                    </div>
+                </div>
+                <div class="query-editor" id="query-editor">
+                    <textarea 
+                        class="query-textarea" 
+                        id="query-input" 
+                        placeholder="SELECT * FROM ${tableName} WHERE condition ORDER BY column LIMIT 10"
+                        spellcheck="false"
+                    ></textarea>
+                </div>
+                <div class="results-container" id="results-container">
+                    <div class="loading" id="loading" style="display: none;">
+                        Executing query...
+                    </div>
+                </div>
+            </div>
+            
+            <script>
+                const vscode = acquireVsCodeApi();
+                
+                function clearQuery() {
+                    document.getElementById('query-input').value = '';
+                }
+                
+                function executeQuery() {
+                    const query = document.getElementById('query-input').value.trim();
+                    if (!query) return;
+                    
+                    document.getElementById('loading').style.display = 'flex';
+                    document.getElementById('results-container').innerHTML = '';
+                    
+                    vscode.postMessage({
+                        command: 'executeQuery',
+                        query: query
+                    });
+                }
+                
+                function showResults(data) {
+                    document.getElementById('loading').style.display = 'none';
+                    
+                    if (data.error) {
+                        document.getElementById('results-container').innerHTML = 
+                            '<div class="error-message">Error: ' + data.error + '</div>';
+                        return;
+                    }
+                    
+                    if (!data.data || data.data.length === 0) {
+                        document.getElementById('results-container').innerHTML = 
+                            '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">No results found</div>';
+                        return;
+                    }
+                    
+                    const columns = Object.keys(data.data[0]);
+                    let html = '<table class="results-table"><thead><tr>';
+                    columns.forEach(col => {
+                        html += '<th>' + col + '</th>';
+                    });
+                    html += '</tr></thead><tbody>';
+                    
+                    data.data.forEach(row => {
+                        html += '<tr>';
+                        columns.forEach(col => {
+                            html += '<td>' + (row[col] === null ? 'NULL' : row[col]) + '</td>';
+                        });
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                    document.getElementById('results-container').innerHTML = html;
+                }
+                
+                // Handle messages from extension
+                window.addEventListener('message', event => {
+                    const message = event.data;
+                    switch (message.command) {
+                        case 'queryResult':
+                            showResults(message.data);
+                            break;
+                        case 'queryError':
+                            showResults({ error: message.error });
+                            break;
+                    }
+                });
+                
+                // Auto-expand query editor on focus
+                document.getElementById('query-input').addEventListener('focus', () => {
+                    document.getElementById('query-editor').classList.add('expanded');
+                });
+                
+                document.getElementById('query-input').addEventListener('blur', () => {
+                    if (!document.getElementById('query-input').value.trim()) {
+                        document.getElementById('query-editor').classList.remove('expanded');
+                    }
+                });
+            </script>
+        </body>
+        </html>`;
     }
 
     private getDataGridHtml(data: any[], tableName: string): string {
@@ -266,6 +658,288 @@ export class DatabaseExplorer {
 
                 .search input::placeholder {
                     color: var(--text-secondary);
+                }
+
+                .toolbar {
+                    display: flex;
+                    gap: 8px;
+                    margin-bottom: 16px;
+                    flex-wrap: wrap;
+                }
+
+                .toolbar-btn {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 8px 12px;
+                    background-color: var(--bg-secondary);
+                    border: 1px solid var(--border-color);
+                    border-radius: 4px;
+                    color: var(--text-primary);
+                    font-size: 12px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+
+                .toolbar-btn:hover {
+                    background-color: var(--bg-tertiary);
+                    border-color: var(--accent);
+                }
+
+                .toolbar-btn svg {
+                    width: 16px;
+                    height: 16px;
+                }
+
+                .pagination-controls {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 16px;
+                    padding: 12px 0;
+                    border-top: 1px solid var(--border-color);
+                    border-bottom: 1px solid var(--border-color);
+                }
+
+                .pagination-info {
+                    color: var(--text-secondary);
+                    font-size: 12px;
+                }
+
+                .pagination-buttons {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+
+                .pagination-buttons select {
+                    background-color: var(--bg-secondary);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-primary);
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                }
+
+                .pagination-buttons button {
+                    background-color: var(--bg-secondary);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-primary);
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+
+                .pagination-buttons button:hover:not(:disabled) {
+                    background-color: var(--bg-tertiary);
+                    border-color: var(--accent);
+                }
+
+                .pagination-buttons button:disabled {
+                    opacity: 0.5;
+                    cursor: not-allowed;
+                }
+
+                /* Popover Styles */
+                .popover {
+                    position: fixed;
+                    background-color: var(--bg-secondary);
+                    border: 1px solid var(--border-color);
+                    border-radius: 6px;
+                    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+                    z-index: 1000;
+                    min-width: 240px;
+                    max-width: 320px;
+                }
+
+                .popover-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 12px 16px;
+                    border-bottom: 1px solid var(--border-color);
+                    background-color: var(--bg-tertiary);
+                    border-radius: 6px 6px 0 0;
+                }
+
+                .popover-title {
+                    font-size: 11px;
+                    font-weight: 600;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                    color: var(--accent);
+                }
+
+                .popover-close {
+                    background: none;
+                    border: none;
+                    color: var(--text-secondary);
+                    font-size: 18px;
+                    cursor: pointer;
+                    padding: 0;
+                    width: 24px;
+                    height: 24px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    border-radius: 4px;
+                    transition: all 0.2s;
+                }
+
+                .popover-close:hover {
+                    background-color: var(--bg-tertiary);
+                    color: var(--text-primary);
+                }
+
+                .popover-content {
+                    padding: 16px;
+                    max-height: 300px;
+                    overflow-y: auto;
+                }
+
+                .popover-footer {
+                    padding: 12px 16px;
+                    border-top: 1px solid var(--border-color);
+                    background-color: var(--bg-tertiary);
+                    border-radius: 0 0 6px 6px;
+                    display: flex;
+                    gap: 8px;
+                    justify-content: flex-end;
+                }
+
+                .popover-btn {
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: 500;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    border: 1px solid transparent;
+                }
+
+                .popover-btn.primary {
+                    background-color: var(--accent);
+                    color: white;
+                    border-color: var(--accent);
+                }
+
+                .popover-btn.primary:hover {
+                    background-color: var(--accent-hover);
+                    border-color: var(--accent-hover);
+                }
+
+                .popover-btn.secondary {
+                    background-color: var(--bg-tertiary);
+                    color: var(--text-primary);
+                    border-color: var(--border-color);
+                }
+
+                .popover-btn.secondary:hover {
+                    background-color: var(--row-hover);
+                    border-color: var(--accent);
+                }
+
+                .column-list {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                }
+
+                .column-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 8px 12px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    transition: background-color 0.2s;
+                }
+
+                .column-item:hover {
+                    background-color: var(--row-hover);
+                }
+
+                .column-item.dragging {
+                    opacity: 0.5;
+                    background-color: var(--accent);
+                }
+
+                .drag-handle {
+                    cursor: grab;
+                    color: var(--text-secondary);
+                    font-size: 14px;
+                }
+
+                .drag-handle:active {
+                    cursor: grabbing;
+                }
+
+                /* Filter Controls */
+                .filter-label {
+                    display: block;
+                    font-size: 10px;
+                    color: var(--text-secondary);
+                    margin-bottom: 4px;
+                    text-transform: uppercase;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                }
+
+                .filter-input {
+                    width: 100%;
+                    background-color: var(--input-bg);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-primary);
+                    padding: 6px 8px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    outline: none;
+                    transition: border-color 0.2s;
+                }
+
+                .filter-input:focus {
+                    border-color: var(--accent);
+                }
+
+                .filter-select {
+                    width: 100%;
+                    background-color: var(--input-bg);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-primary);
+                    padding: 6px 8px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    outline: none;
+                    transition: border-color 0.2s;
+                    margin-bottom: 8px;
+                }
+
+                .filter-select:focus {
+                    border-color: var(--accent);
+                }
+
+                .column-controls {
+                    display: flex;
+                    gap: 2px;
+                    margin-left: auto;
+                }
+
+                .column-controls button {
+                    padding: 2px 4px;
+                    background-color: var(--bg-tertiary);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-secondary);
+                    border-radius: 2px;
+                    font-size: 10px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+
+                .column-controls button:hover {
+                    background-color: var(--row-hover);
+                    color: var(--text-primary);
                 }
 
                 .table-container {
@@ -615,6 +1289,10 @@ export class DatabaseExplorer {
                 ::-webkit-scrollbar-thumb:hover {
                     background: #555555;
                 }
+
+                .hidden {
+                    display: none !important;
+                }
             </style>
         </head>
         <body>
@@ -626,6 +1304,48 @@ export class DatabaseExplorer {
                     <circle cx="11" cy="11" r="8"/>
                 </svg>
                 <input type="text" id="searchInput" placeholder="Search..." onkeyup="filterTable()">
+            </div>
+            
+            <div class="toolbar">
+                <button class="toolbar-btn" onclick="toggleQueryConsole()" title="SQL Query Console">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m15 7-3 3-3-3"/>
+                        <path d="M12 10v10"/>
+                        <path d="M17 12h10"/>
+                    </svg>
+                    Console
+                </button>
+                <button class="toolbar-btn" onclick="openColumnManager(event)" title="Manage Columns">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 3h18v18H3zM9 9h6"/>
+                        <path d="M9 15h6"/>
+                    </svg>
+                    Columns
+                </button>
+                <button class="toolbar-btn" onclick="clearAllFilters()" title="Clear All Filters">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 3H2l8 9.46V19l4 2 4-2V12.46L22 3z"/>
+                        <path d="M6 12h12"/>
+                    </svg>
+                    Reset
+                </button>
+            </div>
+            
+            <div class="pagination-controls">
+                <div class="pagination-info">
+                    <span id="recordCount">Showing ${data.length} rows</span>
+                </div>
+                <div class="pagination-buttons">
+                    <select id="rowsPerPage" onchange="changeRowsPerPage(this.value)">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <button onclick="prevPage()" id="prevBtn" disabled>Previous</button>
+                    <span id="pageInfo">1 / 1</span>
+                    <button onclick="nextPage()" id="nextBtn" disabled>Next</button>
+                </div>
             </div>
             <div class="table-container">
                 <table id="dataTable">
@@ -700,14 +1420,50 @@ export class DatabaseExplorer {
                 <span id="pageInfo">Page 1 of 1</span>
                 <button onclick="nextPage()">Next</button>
             </div>
+
+            <!-- Column Manager Popup -->
+            <div class="popover hidden" id="column-manager">
+                <div class="popover-header">
+                    <span class="popover-title">Manage Columns</span>
+                    <button class="popover-close" onclick="closeColumnManager()">×</button>
+                </div>
+                <div class="popover-content">
+                    <div class="column-list" id="column-list-content">
+                        <!-- Column list will be populated by JavaScript -->
+                    </div>
+                </div>
+                <div class="popover-footer">
+                    <button class="popover-btn" onclick="resetColumnOrder()">Reset Order & Visibility</button>
+                </div>
+            </div>
+
+            <!-- Advanced Filter Popup -->
+            <div class="popover hidden" id="advanced-filter-popup">
+                <div class="popover-header">
+                    <span class="popover-title" id="filter-title">Column Filter</span>
+                    <button class="popover-close" onclick="closeFilterPopup()">×</button>
+                </div>
+                <div class="popover-content">
+                    <div id="filter-controls">
+                        <!-- Filter controls will be populated by JavaScript -->
+                    </div>
+                </div>
+                <div class="popover-footer">
+                    <button class="popover-btn secondary" onclick="clearCurrentFilter()">Clear</button>
+                    <button class="popover-btn primary" onclick="applyFilter()">Apply</button>
+                </div>
+            </div>
+
             <script>
                 const data = ${JSON.stringify(data)};
                 const columns = ${JSON.stringify(columns)};
                 let currentPage = 1;
                 const rowsPerPage = 50;
                 let sortColumns = []; // Array of {columnIndex, direction} for multi-sort
-                let filteredData = [...data];
                 let columnFilters = {};
+                let allColumns = [...columns]; // Store all columns for column manager
+                let visibleColumns = [...columns]; // Track visible columns
+                let columnOrder = [...columns]; // Track column order
 
                 function getColumnType(columnIndex) {
                     const colName = columns[columnIndex];
@@ -1053,44 +1809,263 @@ export class DatabaseExplorer {
 
                 function renderTable() {
                     const tbody = document.getElementById('tableBody');
+                    const thead = document.querySelector('#dataTable thead tr');
                     const start = (currentPage - 1) * rowsPerPage;
                     const end = start + rowsPerPage;
                     const pageData = filteredData.slice(start, end);
-                    
+
+                    // Update table headers to show only visible columns
+                    if (thead) {
+                        const headerCells = Array.from(thead.querySelectorAll('th'));
+                        headerCells.forEach((th, idx) => {
+                            const colName = columns[idx];
+                            th.style.display = visibleColumns.includes(colName) ? '' : 'none';
+                        });
+                    }
+
                     tbody.innerHTML = pageData.map(row => {
                         return \`<tr>\${columns.map(col => {
                             const value = row[col];
                             let cellClass = '';
                             let formattedValue = '';
-                            
+
                             if (value === null || value === undefined) {
                                 cellClass = 'null';
-                                formattedValue = 'null';
-                            } else if (typeof value === 'boolean') {
-                                cellClass = 'boolean';
-                                formattedValue = value.toString();
-                            } else if (typeof value === 'number') {
-                                cellClass = 'number';
-                                formattedValue = value.toLocaleString();
-                            } else if (typeof value === 'string') {
-                                cellClass = 'string';
-                                formattedValue = value;
+                                formattedValue = '<i>NULL</i>';
                             } else if (typeof value === 'object') {
-                                try {
-                                    formattedValue = JSON.stringify(value, null, 2);
-                                } catch {
-                                    formattedValue = '[Object]';
-                                }
+                                cellClass = 'object';
+                                formattedValue = JSON.stringify(value);
                             } else {
+                                cellClass = typeof value;
                                 formattedValue = String(value);
                             }
-                            
-                            return \`<td class="\${cellClass}">\${formattedValue}</td>\`;
+
+                            const displayStyle = visibleColumns.includes(col) ? '' : 'display: none;';
+                            return \`<td class="\${cellClass}" style="\${displayStyle}">\${formattedValue}</td>\`;
                         }).join('')}</tr>\`;
                     }).join('');
-                    
+
+                    updatePagination();
+                }
+
+                function updatePagination() {
                     const totalPages = Math.ceil(filteredData.length / rowsPerPage);
                     document.getElementById('pageInfo').textContent = \`Page \${currentPage} of \${totalPages}\`;
+                    document.getElementById('prevBtn').disabled = currentPage === 1;
+                    document.getElementById('nextBtn').disabled = currentPage === totalPages;
+                    document.getElementById('recordCount').textContent = \`Showing \${filteredData.length} rows\`;
+                }
+
+                function changeRowsPerPage(value) {
+                    rowsPerPage = parseInt(value);
+                    currentPage = 1;
+                    renderTable();
+                }
+
+                function toggleQueryConsole() {
+                    // This would open query console in a new panel
+                    console.log('Query console toggle requested');
+                }
+
+                function openColumnManager(event) {
+                    event.stopPropagation();
+                    // This would open column manager popup
+                    console.log('Column manager requested');
+                }
+
+                function clearAllFilters() {
+                    columnFilters = {};
+                    sortColumns = [];
+                    document.getElementById('searchInput').value = '';
+                    applySorting();
+                    updateSortIndicators();
+                    renderTable();
+                }
+
+                // Column Manager Functions
+                function openColumnManager(event) {
+                    event.stopPropagation();
+                    const mgr = document.getElementById('column-manager');
+                    const trigger = event.currentTarget;
+                    const rect = trigger.getBoundingClientRect();
+                    
+                    renderColumnList();
+                    mgr.classList.remove('hidden');
+                    
+                    let left = rect.left;
+                    if (left + 240 > window.innerWidth) left = window.innerWidth - 250;
+                    mgr.style.left = left + 'px';
+                    mgr.style.top = (rect.bottom + 8) + 'px';
+                }
+
+                function closeColumnManager() { 
+                    document.getElementById('column-manager').classList.add('hidden'); 
+                }
+
+                function renderColumnList() {
+                    const container = document.getElementById('column-list-content');
+                    container.innerHTML = allColumns.map((col, idx) => \`
+                        <div class="column-item" draggable="true" ondragstart="dragCol(event, \${idx})" ondragover="allowDrop(event)" ondrop="dropCol(event, \${idx})">
+                            <span class="drag-handle">⋮⋮</span>
+                            <input type="checkbox" \${visibleColumns.includes(col) ? 'checked' : ''} onchange="toggleColVisibility('\${col}')">
+                            <span>\${col}</span>
+                            <div class="column-controls">
+                                <button onclick="moveColIdx(\${idx}, -1)">↑</button>
+                                <button onclick="moveColIdx(\${idx}, 1)">↓</button>
+                            </div>
+                        </div>
+                    \`).join('');
+                }
+
+                function toggleColVisibility(col) {
+                    if (visibleColumns.includes(col)) {
+                        if (visibleColumns.length > 1) visibleColumns = visibleColumns.filter(c => c !== col);
+                    } else {
+                        visibleColumns.push(col);
+                    }
+                    renderTable();
+                    renderColumnList();
+                }
+
+                function moveColIdx(idx, direction) {
+                    const target = idx + direction;
+                    if (target < 0 || target >= allColumns.length) return;
+                    const temp = allColumns[idx];
+                    allColumns[idx] = allColumns[target];
+                    allColumns[target] = temp;
+                    renderTable();
+                    renderColumnList();
+                }
+
+                function resetColumnOrder() {
+                    allColumns = [...columns];
+                    visibleColumns = [...columns];
+                    renderTable();
+                    renderColumnList();
+                }
+
+                // Drag and drop for columns
+                let draggedIdx = null;
+                function dragCol(e, idx) { draggedIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
+                function allowDrop(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+                function dropCol(e, idx) {
+                    e.preventDefault();
+                    const moving = allColumns.splice(draggedIdx, 1)[0];
+                    allColumns.splice(idx, 0, moving);
+                    renderTable();
+                    renderColumnList();
+                }
+
+                // Advanced Filter Functions
+                let activeFilterCol = null;
+                
+                function openFilterPopup(event, col) {
+                    event.stopPropagation();
+                    const popup = document.getElementById('advanced-filter-popup');
+                    const trigger = event.currentTarget;
+                    const rect = trigger.getBoundingClientRect();
+                    
+                    activeFilterCol = col;
+                    document.getElementById('filter-title').innerText = 'Filter: ' + col;
+                    renderFilterControls(getColumnType(col), columnFilters[col] || {}, document.getElementById('filter-controls'));
+
+                    popup.classList.remove('hidden');
+                    let left = rect.left - 240;
+                    if (left < 10) left = 10;
+                    let top = rect.bottom + 10;
+                    if (top + 400 > window.innerHeight) top = rect.top - 400;
+                    popup.style.left = left + 'px';
+                    popup.style.top = top + 'px';
+                }
+
+                function closeFilterPopup() { 
+                    document.getElementById('advanced-filter-popup').classList.add('hidden'); 
+                }
+
+                function renderFilterControls(type, current, container) {
+                    let html = '';
+                    if (type === 'string') {
+                        html = \`<div>
+                            <label class="filter-label">Contains</label>
+                            <input type="text" class="filter-input" value="\${current.value || ''}" placeholder="Enter keyword...">
+                        </div>\`;
+                    } else if (type === 'number') {
+                        html = \`<div>
+                            <label class="filter-label">Operator</label>
+                            <select class="filter-select" onchange="document.getElementById('filter-value2-box').classList.toggle('hidden', this.value !== 'range')">
+                                <option value="=" \${current.op === '=' ? 'selected' : ''}>=</option>
+                                <option value=">" \${current.op === '>' ? 'selected' : ''}>></option>
+                                <option value="<" \${current.op === '<' ? 'selected' : ''}><</option>
+                                <option value="range" \${current.op === 'range' ? 'selected' : ''}>Range</option>
+                            </select>
+                            <input type="number" class="filter-input" value="\${current.value || ''}" placeholder="Value">
+                            <div id="filter-value2-box" class="\${current.op === 'range' ? '' : 'hidden'}">
+                                <input type="number" class="filter-input" value="\${current.value2 || ''}" placeholder="Max">
+                            </div>
+                        </div>\`;
+                    } else if (type === 'date') {
+                        html = \`<div>
+                            <label class="filter-label">Condition</label>
+                            <select class="filter-select" onchange="document.getElementById('filter-date2-box').classList.toggle('hidden', this.value !== 'range')">
+                                <option value="=" \${current.op === "=" ? 'selected' : ''}>=</option>
+                                <option value=">" \${current.op === '>' ? 'selected' : ''}>After</option>
+                                <option value="<" \${current.op === '<' ? 'selected' : ''}>Before</option>
+                                <option value="range" \${current.op === 'range' ? 'selected' : ''}>Between</option>
+                            </select>
+                            <input type="date" class="filter-input" value="\${current.value || ''}">
+                            <div id="filter-date2-box" class="\${current.op === 'range' ? '' : 'hidden'}">
+                                <input type="date" class="filter-input" value="\${current.value2 || ''}">
+                            </div>
+                        </div>\`;
+                    } else if (type === 'boolean') {
+                        html = \`<select class="filter-select">
+                            <option value="true" \${current.value === 'true' ? 'selected' : ''}>TRUE</option>
+                            <option value="false" \${current.value === 'false' ? 'selected' : ''}>FALSE</option>
+                        </select>\`;
+                    }
+                    container.innerHTML = html;
+                }
+
+                function applyFilter() {
+                    const inputs = document.querySelectorAll('#filter-controls input');
+                    const selects = document.querySelectorAll('#filter-controls select');
+                    
+                    let filterValue = null;
+                    let filterValue2 = null;
+                    let filterOp = null;
+                    
+                    inputs.forEach(input => {
+                        if (input.value) {
+                            if (!filterValue) filterValue = input.value;
+                            else filterValue2 = input.value;
+                        }
+                    });
+                    
+                    selects.forEach(select => {
+                        if (select.value) filterOp = select.value;
+                    });
+                    
+                    if (filterValue === '' && getColumnType(activeFilterCol) !== 'boolean') {
+                        delete columnFilters[activeFilterCol];
+                    } else {
+                        columnFilters[activeFilterCol] = { 
+                            type: getColumnType(activeFilterCol), 
+                            value: filterValue, 
+                            value2: filterValue2, 
+                            op: filterOp || '=' 
+                        };
+                    }
+                    
+                    applyFiltering();
+                    renderTable();
+                    closeFilterPopup();
+                }
+
+                function clearCurrentFilter() { 
+                    delete columnFilters[activeFilterCol]; 
+                    applyFiltering();
+                    renderTable(); 
+                    closeFilterPopup(); 
                 }
 
                 function previousPage() {
@@ -1146,13 +2121,18 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
 
     getChildren(element?: DatabaseTreeItem): Thenable<DatabaseTreeItem[]> {
         if (!element) {
-            return Promise.resolve(this.explorer.getConnections().map(connection => 
+            return Promise.resolve(this.explorer.connections.map(connection => 
                 new DatabaseTreeItem(connection, connection.name, vscode.TreeItemCollapsibleState.Expanded, 'connection')
             ));
         } else if (element.contextValue === 'connection') {
-            return Promise.resolve(element.connection.tables.map((table: string) => 
+            const items = element.connection.tables.map((table: string) => 
                 new DatabaseTreeItem(element.connection, table, vscode.TreeItemCollapsibleState.None, 'table')
-            ));
+            );
+            
+            // Add query console option for tables
+            items.push(new DatabaseTreeItem(element.connection, 'Query Console', vscode.TreeItemCollapsibleState.None, 'query-console'));
+            
+            return Promise.resolve(items);
         }
         return Promise.resolve([]);
     }

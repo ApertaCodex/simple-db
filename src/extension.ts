@@ -65,8 +65,13 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(`Error adding MongoDB connection: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('databaseViewer.refresh', () => {
+            vscode.commands.registerCommand('databaseViewer.refresh', async () => {
                 try {
+                    // Auto-refresh tables/collections for all connections
+                    const connections = databaseExplorer.getConnections();
+                    for (const connection of connections) {
+                        await databaseExplorer.refreshTables(connection);
+                    }
                     treeDataProvider.refresh();
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error refreshing: ${error}`);
@@ -91,6 +96,13 @@ export function activate(context: vscode.ExtensionContext) {
                     openSQLiteFile(uri);
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error opening SQLite file: ${error}`);
+                }
+            }),
+            vscode.commands.registerCommand('databaseViewer.openQueryConsole', (item) => {
+                try {
+                    databaseExplorer.openQueryConsole(item);
+                } catch (error) {
+                    vscode.window.showErrorMessage(`Error opening query console: ${error}`);
                 }
             })
         ];
