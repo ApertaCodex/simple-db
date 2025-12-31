@@ -24,6 +24,7 @@ module.exports = {
   },
   externals: {
     vscode: 'commonjs vscode',
+    '@vscode/sqlite3': 'commonjs @vscode/sqlite3',
     sqlite3: 'commonjs sqlite3',
     mongoose: 'commonjs mongoose'
   },

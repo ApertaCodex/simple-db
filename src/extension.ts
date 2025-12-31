@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { DatabaseExplorer } from './DatabaseExplorer';
 import { SQLiteManager } from './SQLiteManager';
 import { MongoDBManager } from './MongoDBManager';

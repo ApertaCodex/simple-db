@@ -1,4 +1,4 @@
-import * as sqlite3 from 'sqlite3';
+import * as sqlite3 from '@vscode/sqlite3';
 
 export class SQLiteManager {
     async getTables(dbPath: string): Promise<string[]> {
