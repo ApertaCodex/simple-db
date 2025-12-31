@@ -2,7 +2,7 @@
     "name": "database-viewer",
     "displayName": "Database Viewer",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "0.0.208",
+    "version": "0.0.218",
     "publisher": "mmoussa",
     "icon": "icon.png",
     "categories": [
@@ -29,8 +29,7 @@
         "url": "https://github.com/apertacodex/database-viewer"
     },
     "activationEvents": [
-        "onStartupFinished",
-        "onView:databaseExplorer"
+        "onStartupFinished"
     ],
     "main": "./out/extension.js",
     "contributes": {
@@ -209,18 +208,25 @@
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",
-        "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./",
+        "compile": "webpack --mode production",
+        "compile:tsc": "tsc -p ./",
+        "watch": "webpack --watch --mode development",
+        "watch:tsc": "tsc -watch -p ./",
         "build": "npm run compile && vsce package",
+        "build:tsc": "npm run compile:tsc && vsce package",
         "version": "npm version patch && npm run build"
     },
     "devDependencies": {
-        "@types/vscode": "^1.85.0",
         "@types/node": "18.x",
-        "typescript": "^5.0.0"
+        "@types/vscode": "^1.85.0",
+        "@types/webpack": "^5.28.5",
+        "ts-loader": "^9.5.4",
+        "typescript": "^5.0.0",
+        "webpack": "^5.104.1",
+        "webpack-cli": "^6.0.1"
     },
     "dependencies": {
-        "sqlite3": "^5.1.6",
-        "mongoose": "^8.0.3"
+        "mongoose": "^8.0.3",
+        "sqlite3": "^5.1.6"
     }
 }

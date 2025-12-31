@@ -1,6 +1,6 @@
 .vscode/**
 .vscode-test/**
-src/**
+src**
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md
@@ -27,3 +27,14 @@ vsc-extension-quickstart.md
 **/npm-debug.log*
 **/yarn-debug.log*
 **/yarn-error.log*
+webpack.config.js
+out/DatabaseExplorer.js
+out/MongoDBManager.js
+out/SQLiteManager.js
+out/types.js
+out/*.js.map
+node_modules/**/test/**
+node_modules/**/docs/**
+node_modules/**/.github/**
+node_modules/**/example/**
+node_modules/**/examples/**
