@@ -1,9 +1,9 @@
-# Database Viewer
+# Simple DB
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/mmoussa.database-viewer?style=flat-square&label=Version)](https://marketplace.visualstudio.com/items?itemName=mmoussa.database-viewer)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/mmoussa.database-viewer?style=flat-square&label=Installs)](https://marketplace.visualstudio.com/items?itemName=mmoussa.database-viewer)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/mmoussa.database-viewer?style=flat-square&label=Rating)](https://marketplace.visualstudio.com/items?itemName=mmoussa.database-viewer)
-[![License](https://img.shields.io/github/license/ApertaCodex/database-viewer?style=flat-square&label=License)](https://github.com/ApertaCodex/database-viewer/blob/master/LICENSE)
+[![Version](https://img.shields.io/visual-studio-marketplace/v/mmoussa.simple-db?style=flat-square&label=Version)](https://marketplace.visualstudio.com/items?itemName=mmoussa.simple-db)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/mmoussa.simple-db?style=flat-square&label=Installs)](https://marketplace.visualstudio.com/items?itemName=mmoussa.simple-db)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/mmoussa.simple-db?style=flat-square&label=Rating)](https://marketplace.visualstudio.com/items?itemName=mmoussa.simple-db)
+[![License](https://img.shields.io/github/license/ApertaCodex/simple-db?style=flat-square&label=License)](https://github.com/ApertaCodex/simple-db/blob/master/LICENSE)
 
 A powerful VS Code extension for viewing, filtering, and exploring SQLite and MongoDB databases with an intuitive interface and smart filtering capabilities.
 
@@ -39,10 +39,10 @@ A powerful VS Code extension for viewing, filtering, and exploring SQLite and Mo
 
 Install from the VS Code Marketplace:
 ```
-ext install mmoussa.database-viewer
+ext install mmoussa.simple-db
 ```
 
-Or search for "Database Viewer" in the Extensions view (Ctrl+Shift+X).
+Or search for "Simple DB" in the Extensions view (Ctrl+Shift+X).
 
 ## 📖 Usage
 
@@ -142,8 +142,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🤝 Contributing
 
-Contributions are welcome! Feel free to submit issues and pull requests on [GitHub](https://github.com/ApertaCodex/database-viewer).
+Contributions are welcome! Feel free to submit issues and pull requests on [GitHub](https://github.com/ApertaCodex/simple-db).
 
 ## 💬 Support
 
-If you encounter any issues or have suggestions, please [open an issue](https://github.com/ApertaCodex/database-viewer/issues) on GitHub.
+If you encounter any issues or have suggestions, please [open an issue](https://github.com/ApertaCodex/simple-db/issues) on GitHub.

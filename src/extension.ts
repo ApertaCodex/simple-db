@@ -133,9 +133,9 @@ export function activate(context: vscode.ExtensionContext) {
             })
         );
         
-        console.log('Database Viewer extension activated successfully');
+        console.log('Simple DB extension activated successfully');
     } catch (error) {
-        vscode.window.showErrorMessage(`Failed to activate Database Viewer extension: ${error}`);
+        vscode.window.showErrorMessage(`Failed to activate Simple DB extension: ${error}`);
         console.error('Extension activation error:', error);
     }
 }

@@ -1,8 +1,8 @@
 {
-    "name": "database-viewer",
-    "displayName": "Database Viewer",
+    "name": "simple-db",
+    "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "0.0.225",
+    "version": "0.0.245",
     "publisher": "mmoussa",
     "icon": "icon.png",
     "categories": [
@@ -26,7 +26,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/apertacodex/database-viewer"
+        "url": "https://github.com/apertacodex/simple-db"
     },
     "activationEvents": [
         "onStartupFinished"
@@ -34,7 +34,7 @@
     "main": "./out/extension.js",
     "contributes": {
         "views": {
-            "database-viewer": [
+            "simple-db": [
                 {
                     "id": "databaseExplorer",
                     "name": "Database Explorer",
@@ -46,8 +46,8 @@
         "viewsContainers": {
             "activitybar": [
                 {
-                    "id": "database-viewer",
-                    "title": "Database Viewer",
+                    "id": "simple-db",
+                    "title": "Simple DB",
                     "icon": "$(database)"
                 }
             ]
@@ -149,16 +149,6 @@
                     "command": "databaseViewer.removeConnection",
                     "when": "view == databaseExplorer && viewItem == connection",
                     "group": "inline"
-                },
-                {
-                    "command": "databaseViewer.viewData",
-                    "when": "view == databaseExplorer && viewItem == table",
-                    "group": "inline"
-                },
-                {
-                    "command": "databaseViewer.openQueryConsole",
-                    "when": "view == databaseExplorer && viewItem == table",
-                    "group": "inline"
                 }
             ],
             "explorer/context": [
@@ -170,7 +160,7 @@
             ]
         },
         "configuration": {
-            "title": "Database Viewer",
+            "title": "Simple DB",
             "properties": {
                 "databaseViewer.connections": {
                     "type": "array",
@@ -208,25 +198,18 @@
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",
-        "compile": "webpack --mode production",
-        "compile:tsc": "tsc -p ./",
-        "watch": "webpack --watch --mode development",
-        "watch:tsc": "tsc -watch -p ./",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
         "build": "npm run compile && vsce package",
-        "build:tsc": "npm run compile:tsc && vsce package",
         "version": "npm version patch && npm run build"
     },
     "devDependencies": {
-        "@types/node": "18.x",
+        "@types/node": "^18.19.130",
         "@types/vscode": "^1.85.0",
-        "@types/webpack": "^5.28.5",
-        "ts-loader": "^9.5.4",
-        "typescript": "^5.0.0",
-        "webpack": "^5.104.1",
-        "webpack-cli": "^6.0.1"
+        "typescript": "^5.0.0"
     },
     "dependencies": {
-        "@vscode/sqlite3": "^5.1.10-vscode",
-        "mongoose": "^8.0.3"
+        "mongoose": "^8.0.3",
+        "sqlite3": "^5.1.7"
     }
 }

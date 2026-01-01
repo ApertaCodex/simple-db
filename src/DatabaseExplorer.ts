@@ -1,13 +1,46 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { DatabaseItem, DatabaseTreeItem } from './types';
 import { SQLiteManager } from './SQLiteManager';
 import { MongoDBManager } from './MongoDBManager';
+
+interface DatabaseItem {
+    name: string;
+    type: 'sqlite' | 'mongodb';
+    path: string;
+    tables: string[];
+}
+
+class DatabaseTreeItem extends vscode.TreeItem {
+    constructor(
+        public readonly connection: DatabaseItem,
+        public readonly label: string,
+        public readonly collapsibleState: vscode.TreeItemCollapsibleState,
+        public readonly contextValue: string
+    ) {
+        super(label, collapsibleState);
+        this.tooltip = `${this.connection.name} - ${this.label}`;
+        this.contextValue = contextValue;
+
+        if (contextValue === 'connection') {
+            this.iconPath = new vscode.ThemeIcon(this.connection.type === 'sqlite' ? 'database' : 'server');
+        } else {
+            this.iconPath = new vscode.ThemeIcon('table');
+            // Auto-open table data on click
+            this.command = {
+                command: 'databaseViewer.viewData',
+                title: 'View Data',
+                arguments: [this]
+            };
+        }
+    }
+}
+
 
 export class DatabaseExplorer {
     connections: DatabaseItem[] = [];
     private _disposables: vscode.Disposable[] = [];
     private _treeDataProvider: DatabaseTreeDataProvider;
+    private readonly defaultPageSize = 20;
 
     constructor(private sqliteManager: SQLiteManager, private mongoManager: MongoDBManager) {
         this._treeDataProvider = new DatabaseTreeDataProvider(this);
@@ -138,14 +171,70 @@ export class DatabaseExplorer {
 
     async viewData(item: DatabaseTreeItem) {
         try {
-            let data;
+            const pageSize = this.defaultPageSize;
+            let data: any[] = [];
+            let totalRows = 0;
+
             if (item.connection.type === 'sqlite') {
-                data = await this.sqliteManager.getTableData(item.connection.path, item.label);
+                [data, totalRows] = await Promise.all([
+                    this.sqliteManager.getTableData(item.connection.path, item.label, pageSize, 0),
+                    this.sqliteManager.getTableRowCount(item.connection.path, item.label)
+                ]);
             } else {
-                data = await this.mongoManager.getCollectionData(item.connection.path, item.label);
+                [data, totalRows] = await Promise.all([
+                    this.mongoManager.getCollectionData(item.connection.path, item.label, pageSize, 0),
+                    this.mongoManager.getCollectionCount(item.connection.path, item.label)
+                ]);
             }
 
-            this.showDataGrid(data, item.label);
+            const panel = this.showDataGrid(data, item.label, totalRows, pageSize);
+
+            panel.webview.onDidReceiveMessage(
+                async message => {
+                    if (message.command !== 'loadPage') {
+                        return;
+                    }
+
+                    const requestedPageSize = this.normalizePageSize(message.pageSize, pageSize);
+                    const totalPages = Math.max(1, Math.ceil(totalRows / requestedPageSize));
+                    const requestedPage = this.normalizePageNumber(message.page, totalPages);
+                    const offset = (requestedPage - 1) * requestedPageSize;
+
+                    try {
+                        let pageData: any[] = [];
+                        if (item.connection.type === 'sqlite') {
+                            pageData = await this.sqliteManager.getTableData(
+                                item.connection.path,
+                                item.label,
+                                requestedPageSize,
+                                offset
+                            );
+                        } else {
+                            pageData = await this.mongoManager.getCollectionData(
+                                item.connection.path,
+                                item.label,
+                                requestedPageSize,
+                                offset
+                            );
+                        }
+
+                        panel.webview.postMessage({
+                            command: 'pageData',
+                            data: pageData,
+                            page: requestedPage,
+                            pageSize: requestedPageSize,
+                            totalRows
+                        });
+                    } catch (error) {
+                        panel.webview.postMessage({
+                            command: 'pageError',
+                            error: error instanceof Error ? error.message : String(error)
+                        });
+                    }
+                },
+                undefined,
+                this._disposables
+            );
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to load data: ${error}`);
         }
@@ -153,11 +242,12 @@ export class DatabaseExplorer {
 
     async openQueryConsole(item: DatabaseTreeItem) {
         try {
+            const pageSize = this.defaultPageSize;
             let data;
             if (item.connection.type === 'sqlite') {
-                data = await this.sqliteManager.getTableData(item.connection.path, item.label);
+                data = await this.sqliteManager.getTableData(item.connection.path, item.label, pageSize, 0);
             } else {
-                data = await this.mongoManager.getCollectionData(item.connection.path, item.label);
+                data = await this.mongoManager.getCollectionData(item.connection.path, item.label, pageSize, 0);
             }
 
             this.showQueryConsole(data, item.label, item.connection.path);
@@ -188,7 +278,7 @@ export class DatabaseExplorer {
         }
     }
 
-    private showDataGrid(data: any[], tableName: string) {
+    private showDataGrid(data: any[], tableName: string, totalRows: number, pageSize: number): vscode.WebviewPanel {
         const panel = vscode.window.createWebviewPanel(
             'dataGrid',
             `Data: ${tableName}`,
@@ -196,7 +286,8 @@ export class DatabaseExplorer {
             { enableScripts: true }
         );
 
-        panel.webview.html = this.getDataGridHtml(data, tableName);
+        panel.webview.html = this.getDataGridHtml(data, tableName, totalRows, pageSize);
+        return panel;
     }
 
     private showQueryConsole(data: any[], tableName: string, dbPath: string) {
@@ -250,13 +341,29 @@ export class DatabaseExplorer {
         return String(value);
     }
 
+    private normalizePageSize(value: unknown, fallback: number): number {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            return fallback;
+        }
+        return Math.floor(parsed);
+    }
+
+    private normalizePageNumber(value: unknown, maxPage: number): number {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            return 1;
+        }
+        return Math.min(Math.floor(parsed), Math.max(1, maxPage));
+    }
+
     private getQueryConsoleHtml(data: any[], tableName: string, dbPath: string): string {
         return `
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
-            <title>SQL Query Console - ${tableName}</title>
+            <title>SQL Query - ${tableName}</title>
             <style>
                 :root {
                     --bg-primary: #1e1e1e;
@@ -453,7 +560,7 @@ export class DatabaseExplorer {
         <body>
             <div class="console-container">
                 <div class="console-header">
-                    <div class="console-title">SQL Query Console</div>
+                    <div class="console-title">SQL Query</div>
                     <div class="console-controls">
                         <button class="console-btn console-btn-secondary" onclick="clearQuery()">Clear</button>
                         <button class="console-btn" onclick="executeQuery()">Execute</button>
@@ -556,7 +663,7 @@ export class DatabaseExplorer {
         </html>`;
     }
 
-    private getDataGridHtml(data: any[], tableName: string): string {
+    private getDataGridHtml(data: any[], tableName: string, totalRows: number, pageSize: number): string {
         const columns = data.length > 0 ? Object.keys(data[0]) : [];
         
         return `
@@ -1123,6 +1230,7 @@ export class DatabaseExplorer {
                 }
 
                 .header-search-icon {
+                    margin-left: 4px;
                     color: var(--text-secondary);
                     opacity: 0.5;
                     transition: all 0.2s;
@@ -1297,7 +1405,7 @@ export class DatabaseExplorer {
         </head>
         <body>
             <h2>${tableName}</h2>
-            <div class="stats">Showing ${data.length} rows</div>
+            <div class="stats" id="stats">Showing ${data.length} of ${totalRows} rows</div>
             <div class="search">
                 <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m21 21-4.34-4.34"/>
@@ -1307,14 +1415,6 @@ export class DatabaseExplorer {
             </div>
             
             <div class="toolbar">
-                <button class="toolbar-btn" onclick="toggleQueryConsole()" title="SQL Query Console">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="m15 7-3 3-3-3"/>
-                        <path d="M12 10v10"/>
-                        <path d="M17 12h10"/>
-                    </svg>
-                    Console
-                </button>
                 <button class="toolbar-btn" onclick="openColumnManager(event)" title="Manage Columns">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M3 3h18v18H3zM9 9h6"/>
@@ -1333,7 +1433,7 @@ export class DatabaseExplorer {
             
             <div class="pagination-controls">
                 <div class="pagination-info">
-                    <span id="recordCount">Showing ${data.length} rows</span>
+                    <span id="recordCount">Showing ${data.length} of ${totalRows} rows</span>
                 </div>
                 <div class="pagination-buttons">
                     <select id="rowsPerPage" onchange="changeRowsPerPage(this.value)">
@@ -1455,15 +1555,23 @@ export class DatabaseExplorer {
             </div>
 
             <script>
-                const data = ${JSON.stringify(data)};
+                const vscode = acquireVsCodeApi();
+                let data = ${JSON.stringify(data)};
                 const columns = ${JSON.stringify(columns)};
+                let totalRows = ${totalRows};
                 let currentPage = 1;
-                const rowsPerPage = 50;
+                let rowsPerPage = ${pageSize};
                 let sortColumns = []; // Array of {columnIndex, direction} for multi-sort
                 let columnFilters = {};
                 let allColumns = [...columns]; // Store all columns for column manager
                 let visibleColumns = [...columns]; // Track visible columns
                 let columnOrder = [...columns]; // Track column order
+                let filteredData = data.slice();
+
+                const rowsPerPageSelect = document.getElementById('rowsPerPage');
+                if (rowsPerPageSelect) {
+                    rowsPerPageSelect.value = String(rowsPerPage);
+                }
 
                 function getColumnType(columnIndex) {
                     const colName = columns[columnIndex];
@@ -1471,6 +1579,14 @@ export class DatabaseExplorer {
                     if (typeof firstValue === 'number') return 'number';
                     if (typeof firstValue === 'string' && /^\\d{4}-\\d{2}-\\d{2}/.test(firstValue)) return 'date';
                     return 'string';
+                }
+
+                function requestPage(page, pageSize) {
+                    vscode.postMessage({
+                        command: 'loadPage',
+                        page: page,
+                        pageSize: pageSize
+                    });
                 }
 
                 function matchesNumberFilter(value, filterExpr) {
@@ -1603,7 +1719,7 @@ export class DatabaseExplorer {
 
                         return true;
                     });
-                    currentPage = 1;
+                    applySorting();
                     renderTable();
                 }
 
@@ -1810,21 +1926,22 @@ export class DatabaseExplorer {
                 function renderTable() {
                     const tbody = document.getElementById('tableBody');
                     const thead = document.querySelector('#dataTable thead tr');
-                    const start = (currentPage - 1) * rowsPerPage;
-                    const end = start + rowsPerPage;
-                    const pageData = filteredData.slice(start, end);
+                    const pageData = filteredData;
 
-                    // Update table headers to show only visible columns
+                    // Rebuild table headers based on allColumns order and visibility
                     if (thead) {
-                        const headerCells = Array.from(thead.querySelectorAll('th'));
-                        headerCells.forEach((th, idx) => {
-                            const colName = columns[idx];
-                            th.style.display = visibleColumns.includes(colName) ? '' : 'none';
-                        });
+                        thead.innerHTML = allColumns.map(col => {
+                            const isVisible = visibleColumns.includes(col);
+                            const displayStyle = isVisible ? '' : 'display: none;';
+                            return \`<th style="\${displayStyle}">
+                                <span onclick="toggleSort('\${col}')">\${col}</span>
+                            </th>\`;
+                        }).join('');
                     }
 
+                    // Render table body using allColumns order and visibility
                     tbody.innerHTML = pageData.map(row => {
-                        return \`<tr>\${columns.map(col => {
+                        return \`<tr>\${allColumns.map(col => {
                             const value = row[col];
                             let cellClass = '';
                             let formattedValue = '';
@@ -1845,21 +1962,33 @@ export class DatabaseExplorer {
                         }).join('')}</tr>\`;
                     }).join('');
 
+                    updateSortIndicators();
                     updatePagination();
                 }
 
                 function updatePagination() {
-                    const totalPages = Math.ceil(filteredData.length / rowsPerPage);
+                    const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage));
+                    if (currentPage > totalPages) {
+                        currentPage = totalPages;
+                    }
                     document.getElementById('pageInfo').textContent = \`Page \${currentPage} of \${totalPages}\`;
                     document.getElementById('prevBtn').disabled = currentPage === 1;
                     document.getElementById('nextBtn').disabled = currentPage === totalPages;
-                    document.getElementById('recordCount').textContent = \`Showing \${filteredData.length} rows\`;
+                    document.getElementById('recordCount').textContent = \`Showing \${filteredData.length} of \${totalRows} rows\`;
+                    const stats = document.getElementById('stats');
+                    if (stats) {
+                        stats.textContent = \`Showing \${filteredData.length} of \${totalRows} rows\`;
+                    }
                 }
 
                 function changeRowsPerPage(value) {
-                    rowsPerPage = parseInt(value);
+                    const nextSize = parseInt(value, 10);
+                    if (!Number.isFinite(nextSize) || nextSize <= 0) {
+                        return;
+                    }
+                    rowsPerPage = nextSize;
                     currentPage = 1;
-                    renderTable();
+                    requestPage(currentPage, rowsPerPage);
                 }
 
                 function toggleQueryConsole() {
@@ -2070,18 +2199,46 @@ export class DatabaseExplorer {
 
                 function previousPage() {
                     if (currentPage > 1) {
-                        currentPage--;
-                        renderTable();
+                        requestPage(currentPage - 1, rowsPerPage);
                     }
                 }
 
                 function nextPage() {
-                    const totalPages = Math.ceil(filteredData.length / rowsPerPage);
+                    const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage));
                     if (currentPage < totalPages) {
-                        currentPage++;
-                        renderTable();
+                        requestPage(currentPage + 1, rowsPerPage);
                     }
                 }
+
+                function prevPage() {
+                    previousPage();
+                }
+
+                window.addEventListener('message', event => {
+                    const message = event.data;
+                    if (message.command === 'pageData') {
+                        data = Array.isArray(message.data) ? message.data : [];
+                        if (typeof message.totalRows === 'number') {
+                            totalRows = message.totalRows;
+                        }
+                        const nextPage = Number(message.page);
+                        if (Number.isFinite(nextPage) && nextPage > 0) {
+                            currentPage = Math.floor(nextPage);
+                        }
+                        const nextPageSize = Number(message.pageSize);
+                        if (Number.isFinite(nextPageSize) && nextPageSize > 0) {
+                            rowsPerPage = Math.floor(nextPageSize);
+                            if (rowsPerPageSelect) {
+                                rowsPerPageSelect.value = String(rowsPerPage);
+                            }
+                        }
+                        const globalSearchInput = document.getElementById('searchInput');
+                        const globalSearch = globalSearchInput ? globalSearchInput.value.toLowerCase() : '';
+                        applyFilters(globalSearch);
+                    } else if (message.command === 'pageError') {
+                        console.error(message.error || 'Failed to load page');
+                    }
+                });
 
                 renderTable();
             </script>
@@ -2129,8 +2286,8 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
                 new DatabaseTreeItem(element.connection, table, vscode.TreeItemCollapsibleState.None, 'table')
             );
             
-            // Add query console option for tables
-            items.push(new DatabaseTreeItem(element.connection, 'Query Console', vscode.TreeItemCollapsibleState.None, 'query-console'));
+            // Add query option for tables
+            items.push(new DatabaseTreeItem(element.connection, 'Query', vscode.TreeItemCollapsibleState.None, 'query-console'));
             
             return Promise.resolve(items);
         }
