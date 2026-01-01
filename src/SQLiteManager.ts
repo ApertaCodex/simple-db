@@ -1,4 +1,6 @@
 import * as sqlite3 from 'sqlite3';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class SQLiteManager {
     async getTables(dbPath: string): Promise<string[]> {
@@ -81,5 +83,63 @@ export class SQLiteManager {
                 db.close();
             });
         });
+    }
+
+    async exportToJSON(dbPath: string, tableName: string, outputPath?: string): Promise<string> {
+        try {
+            const data = await this.getTableData(dbPath, tableName);
+            
+            const jsonData = JSON.stringify(data, null, 2);
+            
+            if (!outputPath) {
+                const fileName = `${tableName}_${new Date().toISOString().slice(0, 10)}.json`;
+                outputPath = path.join(path.dirname(dbPath), fileName);
+            }
+            
+            await fs.promises.writeFile(outputPath, jsonData, 'utf8');
+            return outputPath;
+        } catch (error) {
+            throw new Error(`Failed to export table ${tableName} to JSON: ${error}`);
+        }
+    }
+
+    async exportToCSV(dbPath: string, tableName: string, outputPath?: string): Promise<string> {
+        try {
+            const data = await this.getTableData(dbPath, tableName);
+            
+            if (data.length === 0) {
+                throw new Error(`Table ${tableName} is empty`);
+            }
+            
+            const headers = Object.keys(data[0]);
+            const csvRows = [headers.join(',')];
+            
+            for (const row of data) {
+                const values = headers.map(header => {
+                    const value = row[header];
+                    if (value === null || value === undefined) {
+                        return '';
+                    }
+                    const stringValue = String(value);
+                    if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+                        return `"${stringValue.replace(/"/g, '""')}"`;
+                    }
+                    return stringValue;
+                });
+                csvRows.push(values.join(','));
+            }
+            
+            const csvData = csvRows.join('\n');
+            
+            if (!outputPath) {
+                const fileName = `${tableName}_${new Date().toISOString().slice(0, 10)}.csv`;
+                outputPath = path.join(path.dirname(dbPath), fileName);
+            }
+            
+            await fs.promises.writeFile(outputPath, csvData, 'utf8');
+            return outputPath;
+        } catch (error) {
+            throw new Error(`Failed to export table ${tableName} to CSV: ${error}`);
+        }
     }
 }

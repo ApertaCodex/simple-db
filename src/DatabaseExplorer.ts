@@ -12,17 +12,24 @@ interface DatabaseItem {
 }
 
 class DatabaseTreeItem extends vscode.TreeItem {
+    public readonly tableName: string;
+
     constructor(
         public readonly connection: DatabaseItem,
-        public readonly label: string,
+        label: string,
         public readonly collapsibleState: vscode.TreeItemCollapsibleState,
         public readonly contextValue: string,
         public readonly recordCount?: number
     ) {
-        const displayLabel = recordCount !== undefined ? `${label} (${recordCount})` : label;
-        super(displayLabel, collapsibleState);
-        this.tooltip = `${this.connection.name} - ${this.label}`;
+        super(label, collapsibleState);
+        this.tableName = label;
+        this.tooltip = `${this.connection.name} - ${label}`;
         this.contextValue = contextValue;
+
+        // Show record count on the right side of the row
+        if (recordCount !== undefined) {
+            this.description = `${recordCount.toLocaleString()} rows`;
+        }
 
         if (contextValue === 'connection') {
             this.iconPath = new vscode.ThemeIcon(this.connection.type === 'sqlite' ? 'database' : 'server');
@@ -180,59 +187,102 @@ export class DatabaseExplorer {
 
             if (item.connection.type === 'sqlite') {
                 [data, totalRows] = await Promise.all([
-                    this.sqliteManager.getTableData(item.connection.path, item.label, pageSize, 0),
-                    this.sqliteManager.getTableRowCount(item.connection.path, item.label)
+                    this.sqliteManager.getTableData(item.connection.path, item.tableName, pageSize, 0),
+                    this.sqliteManager.getTableRowCount(item.connection.path, item.tableName)
                 ]);
             } else {
                 [data, totalRows] = await Promise.all([
-                    this.mongoManager.getCollectionData(item.connection.path, item.label, pageSize, 0),
-                    this.mongoManager.getCollectionCount(item.connection.path, item.label)
+                    this.mongoManager.getCollectionData(item.connection.path, item.tableName, pageSize, 0),
+                    this.mongoManager.getCollectionCount(item.connection.path, item.tableName)
                 ]);
             }
 
-            const panel = this.showDataGrid(data, item.label, totalRows, pageSize);
+            const panel = this.showDataGrid(data, item.tableName, totalRows, pageSize, item.connection.type);
 
             panel.webview.onDidReceiveMessage(
                 async message => {
-                    if (message.command !== 'loadPage') {
-                        return;
-                    }
+                    if (message.command === 'loadPage') {
+                        const requestedPageSize = this.normalizePageSize(message.pageSize, pageSize);
+                        const totalPages = Math.max(1, Math.ceil(totalRows / requestedPageSize));
+                        const requestedPage = this.normalizePageNumber(message.page, totalPages);
+                        const offset = (requestedPage - 1) * requestedPageSize;
 
-                    const requestedPageSize = this.normalizePageSize(message.pageSize, pageSize);
-                    const totalPages = Math.max(1, Math.ceil(totalRows / requestedPageSize));
-                    const requestedPage = this.normalizePageNumber(message.page, totalPages);
-                    const offset = (requestedPage - 1) * requestedPageSize;
+                        try {
+                            let pageData: any[] = [];
+                            if (item.connection.type === 'sqlite') {
+                                pageData = await this.sqliteManager.getTableData(
+                                    item.connection.path,
+                                    item.tableName,
+                                    requestedPageSize,
+                                    offset
+                                );
+                            } else {
+                                pageData = await this.mongoManager.getCollectionData(
+                                    item.connection.path,
+                                    item.tableName,
+                                    requestedPageSize,
+                                    offset
+                                );
+                            }
 
-                    try {
-                        let pageData: any[] = [];
-                        if (item.connection.type === 'sqlite') {
-                            pageData = await this.sqliteManager.getTableData(
-                                item.connection.path,
-                                item.label,
-                                requestedPageSize,
-                                offset
-                            );
-                        } else {
-                            pageData = await this.mongoManager.getCollectionData(
-                                item.connection.path,
-                                item.label,
-                                requestedPageSize,
-                                offset
-                            );
+                            panel.webview.postMessage({
+                                command: 'pageData',
+                                data: pageData,
+                                page: requestedPage,
+                                pageSize: requestedPageSize,
+                                totalRows
+                            });
+                        } catch (error) {
+                            panel.webview.postMessage({
+                                command: 'pageError',
+                                error: error instanceof Error ? error.message : String(error)
+                            });
                         }
+                    } else if (message.command === 'executeQuery') {
+                        try {
+                            let result;
+                            if (item.connection.type === 'sqlite') {
+                                result = await this.executeQuery(item.connection.path, message.query);
+                            } else {
+                                panel.webview.postMessage({
+                                    command: 'queryError',
+                                    error: 'MongoDB query execution not yet implemented'
+                                });
+                                return;
+                            }
 
-                        panel.webview.postMessage({
-                            command: 'pageData',
-                            data: pageData,
-                            page: requestedPage,
-                            pageSize: requestedPageSize,
-                            totalRows
-                        });
-                    } catch (error) {
-                        panel.webview.postMessage({
-                            command: 'pageError',
-                            error: error instanceof Error ? error.message : String(error)
-                        });
+                            panel.webview.postMessage({
+                                command: 'queryResult',
+                                data: result.data || result,
+                                rowCount: result.data?.length || (Array.isArray(result) ? result.length : 0)
+                            });
+                        } catch (error) {
+                            panel.webview.postMessage({
+                                command: 'queryError',
+                                error: error instanceof Error ? error.message : String(error)
+                            });
+                        }
+                    } else if (message.command === 'generateAIQuery') {
+                        try {
+                            if (item.connection.type !== 'sqlite') {
+                                panel.webview.postMessage({
+                                    command: 'aiQueryError',
+                                    error: 'AI query generation is currently only supported for SQLite databases'
+                                });
+                                return;
+                            }
+
+                            const sqlQuery = await this.generateAIQuery(item, message.prompt);
+                            panel.webview.postMessage({
+                                command: 'aiQueryResult',
+                                sqlQuery: sqlQuery
+                            });
+                        } catch (error) {
+                            panel.webview.postMessage({
+                                command: 'aiQueryError',
+                                error: error instanceof Error ? error.message : String(error)
+                            });
+                        }
                     }
                 },
                 undefined,
@@ -248,15 +298,211 @@ export class DatabaseExplorer {
             const pageSize = this.defaultPageSize;
             let data;
             if (item.connection.type === 'sqlite') {
-                data = await this.sqliteManager.getTableData(item.connection.path, item.label, pageSize, 0);
+                data = await this.sqliteManager.getTableData(item.connection.path, item.tableName, pageSize, 0);
             } else {
-                data = await this.mongoManager.getCollectionData(item.connection.path, item.label, pageSize, 0);
+                data = await this.mongoManager.getCollectionData(item.connection.path, item.tableName, pageSize, 0);
             }
 
-            this.showQueryConsole(data, item.label, item.connection.path);
+            this.showQueryConsole(data, item.tableName, item.connection.path);
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to open query console: ${error}`);
         }
+    }
+
+    async exportToJSON(item: DatabaseTreeItem) {
+        try {
+            if (item.connection.type !== 'sqlite') {
+                vscode.window.showErrorMessage('JSON export is currently only supported for SQLite databases');
+                return;
+            }
+
+            const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
+            const outputPath = await this.sqliteManager.exportToJSON(item.connection.path, tableName);
+            vscode.window.showInformationMessage(`Table "${tableName}" exported to JSON: ${outputPath}`);
+            
+            // Ask if user wants to open the exported file
+            const openAction = 'Open File';
+            const result = await vscode.window.showInformationMessage(
+                `Export completed successfully. Would you like to open the exported file?`,
+                openAction
+            );
+            
+            if (result === openAction) {
+                const document = await vscode.workspace.openTextDocument(outputPath);
+                await vscode.window.showTextDocument(document);
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to export table to JSON: ${error}`);
+        }
+    }
+
+    async exportToCSV(item: DatabaseTreeItem) {
+        try {
+            if (item.connection.type !== 'sqlite') {
+                vscode.window.showErrorMessage('CSV export is currently only supported for SQLite databases');
+                return;
+            }
+
+            const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
+            const outputPath = await this.sqliteManager.exportToCSV(item.connection.path, tableName);
+            vscode.window.showInformationMessage(`Table "${tableName}" exported to CSV: ${outputPath}`);
+            
+            // Ask if user wants to open the exported file
+            const openAction = 'Open File';
+            const result = await vscode.window.showInformationMessage(
+                `Export completed successfully. Would you like to open the exported file?`,
+                openAction
+            );
+            
+            if (result === openAction) {
+                const document = await vscode.workspace.openTextDocument(outputPath);
+                await vscode.window.showTextDocument(document);
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to export table to CSV: ${error}`);
+        }
+    }
+
+    async generateAIQuery(item: DatabaseTreeItem, prompt: string): Promise<string> {
+        try {
+            // Get OpenAI API key from environment or settings
+            let apiKey = process.env.OPENAI_API_KEY;
+            
+            if (!apiKey) {
+                // Try to get from VSCode settings
+                const config = vscode.workspace.getConfiguration('simpleDB');
+                apiKey = config.get<string>('openaiApiKey');
+                
+                if (!apiKey) {
+                    // Ask user to provide API key
+                    const result = await vscode.window.showInputBox({
+                        prompt: 'Enter your OpenAI API key (will be saved in settings)',
+                        password: true,
+                        validateInput: (value) => {
+                            if (!value || value.trim().length === 0) {
+                                return 'API key is required';
+                            }
+                            if (!value.startsWith('sk-')) {
+                                return 'Invalid OpenAI API key format';
+                            }
+                            return null;
+                        }
+                    });
+                    
+                    if (result) {
+                        apiKey = result;
+                        // Save to settings
+                        await config.update('openaiApiKey', apiKey, vscode.ConfigurationTarget.Global);
+                    } else {
+                        throw new Error('OpenAI API key is required for AI query generation');
+                    }
+                }
+            }
+
+            // Get table schema for context
+            let tableSchema = '';
+            if (item.connection.type === 'sqlite') {
+                const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
+                const tableData = await this.sqliteManager.getTableData(item.connection.path, tableName, 1, 0);
+                if (tableData.length > 0) {
+                    const columns = Object.keys(tableData[0]);
+                    tableSchema = `Table: ${tableName}\nColumns: ${columns.join(', ')}\n`;
+                }
+            }
+
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-3.5-turbo',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: `You are a SQL expert. Convert natural language queries to SQL. Only respond with the SQL query, no explanations. Use the table schema provided for context.\n\n${tableSchema}\nRules:\n- Only return the SQL query\n- Use proper SQLite syntax\n- Do not include markdown formatting\n- Do not include explanations`
+                        },
+                        {
+                            role: 'user',
+                            content: prompt
+                        }
+                    ],
+                    max_tokens: 500,
+                    temperature: 0.3
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+            }
+
+            const data = await response.json() as any;
+            const sqlQuery = data.choices?.[0]?.message?.content?.trim();
+            
+            if (!sqlQuery) {
+                throw new Error('No SQL query generated');
+            }
+
+            return sqlQuery;
+        } catch (error) {
+            throw new Error(`AI query generation failed: ${error}`);
+        }
+    }
+
+    async queryTable(item: DatabaseTreeItem) {
+        const panel = vscode.window.createWebviewPanel(
+            'queryInterface',
+            `Query: ${item.tableName}`,
+            vscode.ViewColumn.One,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true
+            }
+        );
+
+        const sampleQueries = item.connection.type === 'sqlite' ? [
+            { label: 'Select All Records', query: `SELECT * FROM ${item.tableName} LIMIT 100` },
+            { label: 'Count Records', query: `SELECT COUNT(*) as total FROM ${item.tableName}` },
+            { label: 'Select First 10', query: `SELECT * FROM ${item.tableName} LIMIT 10` },
+            { label: 'Select Distinct Values', query: `SELECT DISTINCT * FROM ${item.tableName}` },
+            { label: 'Delete All Records', query: `DELETE FROM ${item.tableName}` },
+            { label: 'Drop Table', query: `DROP TABLE ${item.tableName}` }
+        ] : [
+            { label: 'Find All Documents', query: `db.${item.tableName}.find({})` },
+            { label: 'Count Documents', query: `db.${item.tableName}.countDocuments({})` },
+            { label: 'Find First 10', query: `db.${item.tableName}.find({}).limit(10)` },
+            { label: 'Delete All Documents', query: `db.${item.tableName}.deleteMany({})` },
+            { label: 'Drop Collection', query: `db.${item.tableName}.drop()` }
+        ];
+
+        panel.webview.html = this.getQueryInterfaceHtml(item.tableName, sampleQueries);
+
+        panel.webview.onDidReceiveMessage(async (message) => {
+            if (message.command === 'executeQuery') {
+                try {
+                    let result;
+                    if (item.connection.type === 'sqlite') {
+                        result = await this.executeQuery(item.connection.path, message.query);
+                    } else {
+                        // MongoDB query execution
+                        vscode.window.showWarningMessage('MongoDB query execution not yet implemented');
+                        return;
+                    }
+
+                    panel.webview.postMessage({
+                        command: 'queryResult',
+                        data: result.data || result,
+                        rowCount: result.data?.length || 0
+                    });
+                } catch (error) {
+                    panel.webview.postMessage({
+                        command: 'queryError',
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+            }
+        });
     }
 
     private async executeQuery(dbPath: string, query: string): Promise<any> {
@@ -281,7 +527,7 @@ export class DatabaseExplorer {
         }
     }
 
-    private showDataGrid(data: any[], tableName: string, totalRows: number, pageSize: number): vscode.WebviewPanel {
+    private showDataGrid(data: any[], tableName: string, totalRows: number, pageSize: number, dbType: 'sqlite' | 'mongodb'): vscode.WebviewPanel {
         const panel = vscode.window.createWebviewPanel(
             'dataGrid',
             `Data: ${tableName}`,
@@ -289,7 +535,7 @@ export class DatabaseExplorer {
             { enableScripts: true }
         );
 
-        panel.webview.html = this.getDataGridHtml(data, tableName, totalRows, pageSize);
+        panel.webview.html = this.getDataGridHtml(data, tableName, totalRows, pageSize, dbType);
         return panel;
     }
 
@@ -666,8 +912,252 @@ export class DatabaseExplorer {
         </html>`;
     }
 
-    private getDataGridHtml(data: any[], tableName: string, totalRows: number, pageSize: number): string {
+    private getQueryInterfaceHtml(tableName: string, sampleQueries: Array<{label: string, query: string}>): string {
+        const sampleOptions = sampleQueries.map((sq, idx) =>
+            `<option value="${idx}">${sq.label}</option>`
+        ).join('');
+
+        const queriesJson = JSON.stringify(sampleQueries.map(sq => sq.query));
+
+        return `<!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {
+                    font-family: var(--vscode-font-family);
+                    padding: 20px;
+                    color: var(--vscode-foreground);
+                    background-color: var(--vscode-editor-background);
+                }
+                .header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 20px;
+                }
+                h2 { margin: 0; }
+                .query-section {
+                    margin-bottom: 20px;
+                }
+                .sample-queries {
+                    margin-bottom: 10px;
+                    display: flex;
+                    gap: 10px;
+                    align-items: center;
+                }
+                select, button {
+                    padding: 6px 12px;
+                    background-color: var(--vscode-dropdown-background);
+                    color: var(--vscode-dropdown-foreground);
+                    border: 1px solid var(--vscode-dropdown-border);
+                    cursor: pointer;
+                }
+                button {
+                    background-color: var(--vscode-button-background);
+                    color: var(--vscode-button-foreground);
+                }
+                button:hover {
+                    background-color: var(--vscode-button-hoverBackground);
+                }
+                button.danger {
+                    background-color: #d73a49;
+                    color: white;
+                }
+                button.danger:hover {
+                    background-color: #cb2431;
+                }
+                textarea {
+                    width: 100%;
+                    min-height: 150px;
+                    padding: 10px;
+                    font-family: 'Courier New', monospace;
+                    font-size: 14px;
+                    background-color: var(--vscode-input-background);
+                    color: var(--vscode-input-foreground);
+                    border: 1px solid var(--vscode-input-border);
+                    resize: vertical;
+                }
+                .results {
+                    margin-top: 20px;
+                }
+                .result-info {
+                    padding: 10px;
+                    background-color: var(--vscode-editor-inactiveSelectionBackground);
+                    margin-bottom: 10px;
+                    border-radius: 3px;
+                }
+                .error {
+                    color: var(--vscode-errorForeground);
+                    background-color: var(--vscode-inputValidation-errorBackground);
+                    padding: 10px;
+                    border-radius: 3px;
+                    margin-top: 10px;
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 10px;
+                }
+                th, td {
+                    padding: 8px;
+                    border: 1px solid var(--vscode-panel-border);
+                    text-align: left;
+                }
+                th {
+                    background-color: var(--vscode-editor-selectionBackground);
+                    font-weight: bold;
+                }
+                .warning {
+                    background-color: #856404;
+                    color: #fff3cd;
+                    padding: 10px;
+                    border-radius: 3px;
+                    margin-bottom: 10px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h2>Query: ${tableName}</h2>
+            </div>
+
+            <div class="query-section">
+                <div class="sample-queries">
+                    <label for="sampleQuery">Sample Queries:</label>
+                    <select id="sampleQuery" onchange="loadSampleQuery()">
+                        <option value="">-- Select a query --</option>
+                        ${sampleOptions}
+                    </select>
+                    <button onclick="loadSampleQuery()">Load</button>
+                </div>
+
+                <textarea id="queryInput" placeholder="Enter your SQL query here..."></textarea>
+
+                <div style="margin-top: 10px; display: flex; gap: 10px;">
+                    <button onclick="executeQuery()">Execute Query</button>
+                    <button onclick="clearResults()">Clear Results</button>
+                </div>
+            </div>
+
+            <div id="results" class="results"></div>
+
+            <script>
+                const vscode = acquireVsCodeApi();
+                const sampleQueries = ${queriesJson};
+
+                function loadSampleQuery() {
+                    const select = document.getElementById('sampleQuery');
+                    const idx = select.value;
+                    if (idx !== '' && sampleQueries[idx]) {
+                        document.getElementById('queryInput').value = sampleQueries[idx];
+
+                        // Show warning for destructive queries
+                        const query = sampleQueries[idx].toUpperCase();
+                        if (query.includes('DELETE') || query.includes('DROP')) {
+                            showWarning();
+                        }
+                    }
+                }
+
+                function showWarning() {
+                    const resultsDiv = document.getElementById('results');
+                    resultsDiv.innerHTML = '<div class="warning">⚠️ Warning: This is a destructive operation that cannot be undone!</div>';
+                }
+
+                function executeQuery() {
+                    const query = document.getElementById('queryInput').value.trim();
+                    if (!query) {
+                        document.getElementById('results').innerHTML = '<div class="error">Please enter a query</div>';
+                        return;
+                    }
+
+                    // Show loading
+                    document.getElementById('results').innerHTML = '<div class="result-info">Executing query...</div>';
+
+                    vscode.postMessage({
+                        command: 'executeQuery',
+                        query: query
+                    });
+                }
+
+                function clearResults() {
+                    document.getElementById('results').innerHTML = '';
+                    document.getElementById('queryInput').value = '';
+                    document.getElementById('sampleQuery').value = '';
+                }
+
+                window.addEventListener('message', event => {
+                    const message = event.data;
+
+                    if (message.command === 'queryResult') {
+                        displayResults(message.data, message.rowCount);
+                    } else if (message.command === 'queryError') {
+                        displayError(message.error);
+                    }
+                });
+
+                function displayResults(data, rowCount) {
+                    const resultsDiv = document.getElementById('results');
+
+                    if (!data || data.length === 0) {
+                        resultsDiv.innerHTML = '<div class="result-info">Query executed successfully. No rows returned.</div>';
+                        return;
+                    }
+
+                    const columns = Object.keys(data[0]);
+                    let html = \`<div class="result-info">Returned \${rowCount} row(s)</div>\`;
+
+                    html += '<table><thead><tr>';
+                    columns.forEach(col => {
+                        html += \`<th>\${col}</th>\`;
+                    });
+                    html += '</tr></thead><tbody>';
+
+                    data.forEach(row => {
+                        html += '<tr>';
+                        columns.forEach(col => {
+                            const value = row[col] === null ? 'NULL' : row[col];
+                            html += \`<td>\${value}</td>\`;
+                        });
+                        html += '</tr>';
+                    });
+
+                    html += '</tbody></table>';
+                    resultsDiv.innerHTML = html;
+                }
+
+                function displayError(error) {
+                    document.getElementById('results').innerHTML = \`<div class="error">Error: \${error}</div>\`;
+                }
+            </script>
+        </body>
+        </html>`;
+    }
+
+    private getDataGridHtml(data: any[], tableName: string, totalRows: number, pageSize: number, dbType: 'sqlite' | 'mongodb'): string {
         const columns = data.length > 0 ? Object.keys(data[0]) : [];
+
+        // Sample queries based on database type
+        const sampleQueries = dbType === 'sqlite' ? [
+            { label: 'Select All Records', query: `SELECT * FROM ${tableName} LIMIT 100` },
+            { label: 'Count Records', query: `SELECT COUNT(*) as total FROM ${tableName}` },
+            { label: 'Select First 10', query: `SELECT * FROM ${tableName} LIMIT 10` },
+            { label: 'Select Distinct Values', query: `SELECT DISTINCT * FROM ${tableName}` },
+            { label: 'Delete All Records', query: `DELETE FROM ${tableName}` },
+            { label: 'Drop Table', query: `DROP TABLE ${tableName}` }
+        ] : [
+            { label: 'Find All Documents', query: `db.${tableName}.find({})` },
+            { label: 'Count Documents', query: `db.${tableName}.countDocuments({})` },
+            { label: 'Find First 10', query: `db.${tableName}.find({}).limit(10)` },
+            { label: 'Delete All Documents', query: `db.${tableName}.deleteMany({})` },
+            { label: 'Drop Collection', query: `db.${tableName}.drop()` }
+        ];
+
+        const sampleOptions = sampleQueries.map((sq, idx) =>
+            `<option value="${idx}">${sq.label}</option>`
+        ).join('');
+
+        const queriesJson = JSON.stringify(sampleQueries.map(sq => sq.query));
         
         return `
         <!DOCTYPE html>
@@ -1058,6 +1548,7 @@ export class DatabaseExplorer {
                     border-radius: 4px;
                     overflow: auto;
                     max-height: 70vh;
+                    min-height: 500px;
                 }
 
                 table {
@@ -1113,8 +1604,65 @@ export class DatabaseExplorer {
 
                 .filter-input-container {
                     display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                    padding: 8px;
+                }
+
+                .filter-operator-select {
+                    width: 100%;
+                    background-color: var(--bg-primary);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-primary);
+                    padding: 4px 6px;
+                    border-radius: 3px;
+                    font-size: 11px;
+                    outline: none;
+                    margin-bottom: 4px;
+                }
+
+                .filter-operator-select:focus {
+                    border-color: var(--accent);
+                }
+
+                .filter-value-container {
+                    display: flex;
                     gap: 4px;
-                    padding: 4px;
+                    align-items: center;
+                }
+
+                .filter-text-input,
+                .filter-number-input,
+                .filter-date-input {
+                    flex: 1;
+                    padding: 4px 6px;
+                    background-color: var(--bg-primary);
+                    border: 1px solid var(--border-color);
+                    border-radius: 3px;
+                    color: var(--text-primary);
+                    font-size: 11px;
+                    outline: none;
+                }
+
+                .filter-text-input:focus,
+                .filter-number-input:focus,
+                .filter-date-input:focus {
+                    background-color: var(--bg-tertiary);
+                    border-color: var(--accent);
+                }
+
+                .filter-number-second,
+                .filter-date-second {
+                    display: none;
+                }
+
+                .filter-date-input[type="date"]::-webkit-calendar-picker-indicator {
+                    filter: invert(1);
+                    cursor: pointer;
+                }
+
+                .filter-date-input[type="date"]::-webkit-calendar-picker-indicator:hover {
+                    filter: invert(0.8);
                 }
 
                 .column-filter input {
@@ -1404,10 +1952,247 @@ export class DatabaseExplorer {
                 .hidden {
                     display: none !important;
                 }
+
+                .empty-state {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 60px 20px;
+                    text-align: center;
+                    color: var(--text-secondary);
+                    min-height: 400px;
+                }
+
+                .empty-state-icon {
+                    font-size: 48px;
+                    margin-bottom: 16px;
+                    opacity: 0.5;
+                }
+
+                .empty-state-title {
+                    font-size: 16px;
+                    font-weight: 600;
+                    margin-bottom: 8px;
+                    color: var(--text-primary);
+                }
+
+                .empty-state-message {
+                    font-size: 13px;
+                    line-height: 1.4;
+                    max-width: 400px;
+                }
+
+                .records-found {
+                    background-color: rgba(76, 175, 80, 0.1);
+                    color: #4caf50;
+                    padding: 8px 12px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    margin-bottom: 8px;
+                    border-left: 3px solid #4caf50;
+                }
+
+                .query-section {
+                    margin-bottom: 20px;
+                    border: 1px solid var(--border-color);
+                    border-radius: 4px;
+                    overflow: hidden;
+                }
+
+                .query-header {
+                    background-color: var(--bg-secondary);
+                    padding: 10px 16px;
+                    cursor: pointer;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    user-select: none;
+                }
+
+                .query-header:hover {
+                    background-color: var(--accent-dim);
+                }
+
+                .query-content {
+                    padding: 16px;
+                    display: none;
+                }
+
+                .query-content.expanded {
+                    display: block;
+                }
+
+                .query-row {
+                    display: flex;
+                    gap: 10px;
+                    margin-bottom: 10px;
+                    align-items: center;
+                }
+
+                .query-row label {
+                    min-width: 120px;
+                    color: var(--text-secondary);
+                }
+
+                .query-row select {
+                    flex: 1;
+                    padding: 6px 12px;
+                    background-color: var(--bg-primary);
+                    border: 1px solid var(--border-color);
+                    color: var(--text-primary);
+                    border-radius: 3px;
+                }
+
+                .query-textarea {
+                    width: 100%;
+                    min-height: 100px;
+                    padding: 10px;
+                    font-family: 'Courier New', monospace;
+                    font-size: 13px;
+                    background-color: var(--bg-primary);
+                    color: var(--text-primary);
+                    border: 1px solid var(--border-color);
+                    border-radius: 3px;
+                    resize: vertical;
+                }
+
+                .query-actions {
+                    display: flex;
+                    gap: 10px;
+                    margin-top: 10px;
+                }
+
+                .query-btn {
+                    padding: 8px 16px;
+                    background-color: var(--accent);
+                    color: var(--text-primary);
+                    border: none;
+                    border-radius: 3px;
+                    cursor: pointer;
+                }
+
+                .query-btn:hover {
+                    opacity: 0.8;
+                }
+
+                .query-results {
+                    margin-top: 16px;
+                    padding: 10px;
+                    background-color: var(--bg-secondary);
+                    border-radius: 3px;
+                    max-height: 400px;
+                    overflow: auto;
+                }
+
+                .query-results table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 12px;
+                }
+
+                .query-results th,
+                .query-results td {
+                    padding: 6px 8px;
+                    border: 1px solid var(--border-color);
+                    text-align: left;
+                }
+
+                .query-results th {
+                    background-color: var(--accent-dim);
+                    font-weight: 600;
+                }
+
+                .query-error {
+                    color: #f48771;
+                    background-color: rgba(244, 135, 113, 0.1);
+                    padding: 10px;
+                    border-radius: 3px;
+                }
+
+                .query-warning {
+                    background-color: #856404;
+                    color: #fff3cd;
+                    padding: 10px;
+                    border-radius: 3px;
+                    margin-bottom: 10px;
+                }
+
+                .query-mode-toggle {
+                    display: flex;
+                    background-color: var(--bg-primary);
+                    border: 1px solid var(--border-color);
+                    border-radius: 4px;
+                    overflow: hidden;
+                }
+
+                .mode-btn {
+                    padding: 6px 12px;
+                    background-color: transparent;
+                    border: none;
+                    color: var(--text-secondary);
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    font-size: 12px;
+                }
+
+                .mode-btn.active {
+                    background-color: var(--accent);
+                    color: var(--text-primary);
+                }
+
+                .mode-btn:hover:not(.active) {
+                    background-color: var(--row-hover);
+                    color: var(--text-primary);
+                }
+
+                .ai-prompt-examples {
+                    flex: 1;
+                    color: var(--text-secondary);
+                    font-style: italic;
+                    font-size: 11px;
+                }
             </style>
         </head>
         <body>
             <h2>${tableName}</h2>
+
+            <div class="query-section">
+                <div class="query-header" onclick="toggleQuerySection()">
+                    <span>📝 SQL Query Interface</span>
+                    <span id="queryToggle">▶</span>
+                </div>
+                <div class="query-content" id="queryContent">
+                    <div class="query-row">
+                        <label>Mode:</label>
+                        <div class="query-mode-toggle">
+                            <button type="button" id="sqlModeBtn" class="mode-btn active" onclick="setQueryMode('sql')">SQL</button>
+                            <button type="button" id="aiModeBtn" class="mode-btn" onclick="setQueryMode('ai')">🤖 AI</button>
+                        </div>
+                    </div>
+                    <div class="query-row" id="sampleQueryRow">
+                        <label>Sample Queries:</label>
+                        <select id="sampleQuerySelect" onchange="loadDataGridSampleQuery()">
+                            <option value="">-- Select a query --</option>
+                            ${sampleOptions}
+                        </select>
+                    </div>
+                    <div class="query-row" id="aiPromptRow" style="display: none;">
+                        <label>AI Prompt:</label>
+                        <div class="ai-prompt-examples">
+                            <small>Examples: "Show me all users who registered last month", "Find the top 10 most expensive products", "Count orders by status"</small>
+                        </div>
+                    </div>
+                    <textarea class="query-textarea" id="queryTextarea" placeholder="Enter your SQL query here..."></textarea>
+                    <div class="query-actions">
+                        <button class="query-btn" id="executeBtn" onclick="executeDataGridQuery()">Execute Query</button>
+                        <button class="query-btn" id="generateBtn" onclick="generateAIQuery()" style="display: none;">Generate SQL</button>
+                        <button class="query-btn" onclick="clearQueryResults()">Clear</button>
+                    </div>
+                    <div id="queryResults"></div>
+                </div>
+            </div>
+
             <div class="stats" id="stats">Showing ${data.length} of ${totalRows} rows</div>
             <div class="search">
                 <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1464,31 +2249,60 @@ export class DatabaseExplorer {
 
                                 if (isDate) {
                                     filterInput = `<div class="filter-input-container">
-                                        <input type="text" id="filter-input-${idx}"
-                                               placeholder="2024-01-01 to 2024-12-31"
-                                               onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})"
-                                               onclick="event.stopPropagation()">
+                                        <select class="filter-operator-select" id="filter-operator-${idx}" onchange="updateFilterInput(${idx})">
+                                            <option value="contains">Contains</option>
+                                            <option value="=">=</option>
+                                            <option value=">">After</option>
+                                            <option value="<">Before</option>
+                                            <option value=">=">On or After</option>
+                                            <option value="<=">On or Before</option>
+                                            <option value="range">Between</option>
+                                        </select>
+                                        <div class="filter-value-container">
+                                            <input type="date" class="filter-date-input" id="filter-value-${idx}" 
+                                                   onchange="submitColumnFilter(${idx})">
+                                            <input type="date" class="filter-date-input filter-date-second" id="filter-value2-${idx}" 
+                                                   style="display: none;" onchange="submitColumnFilter(${idx})">
+                                        </div>
                                         <button class="filter-btn" onclick="submitColumnFilter(${idx})"></button>
                                     </div>`;
-                                    helpText = '<div class="filter-help">&gt;, &lt;, from to, YYYY-MM-DD</div>';
+                                    helpText = '<div class="filter-help">Select operator and choose date(s)</div>';
                                 } else if (isNumber) {
                                     filterInput = `<div class="filter-input-container">
-                                        <input type="text" id="filter-input-${idx}"
-                                               placeholder=">100, <50, 10-20..."
-                                               onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})"
-                                               onclick="event.stopPropagation()">
+                                        <select class="filter-operator-select" id="filter-operator-${idx}" onchange="updateFilterInput(${idx})">
+                                            <option value="=">=</option>
+                                            <option value=">">></option>
+                                            <option value="<"><</option>
+                                            <option value=">=">>=</option>
+                                            <option value="<="><=</option>
+                                            <option value="!=">!=</option>
+                                            <option value="range">Range</option>
+                                        </select>
+                                        <div class="filter-value-container">
+                                            <input type="number" class="filter-number-input" id="filter-value-${idx}" 
+                                                   placeholder="Value" onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})">
+                                            <input type="number" class="filter-number-input filter-number-second" id="filter-value2-${idx}" 
+                                                   placeholder="Max" style="display: none;" onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})">
+                                        </div>
                                         <button class="filter-btn" onclick="submitColumnFilter(${idx})"></button>
                                     </div>`;
-                                    helpText = '<div class="filter-help">&gt;, &lt;, &gt;=, &lt;=, =, 10-20</div>';
+                                    helpText = '<div class="filter-help">Select operator and enter value(s)</div>';
                                 } else {
                                     filterInput = `<div class="filter-input-container">
-                                        <input type="text" id="filter-input-${idx}"
-                                               placeholder="Filter ${col}..."
-                                               onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})"
-                                               onclick="event.stopPropagation()">
+                                        <select class="filter-operator-select" id="filter-operator-${idx}" onchange="updateFilterInput(${idx})">
+                                            <option value="contains">Contains</option>
+                                            <option value="=">=</option>
+                                            <option value="!=">!=</option>
+                                            <option value="starts">Starts with</option>
+                                            <option value="ends">Ends with</option>
+                                        </select>
+                                        <div class="filter-value-container">
+                                            <input type="text" class="filter-text-input" id="filter-value-${idx}" 
+                                                   placeholder="Filter ${col}..." onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})">
+                                        </div>
                                         <button class="filter-btn" onclick="submitColumnFilter(${idx})"></button>
                                     </div>`;
-                                    helpText = '<div class="filter-help">Type and press Enter or click 🔍</div>';
+                                    helpText = '<div class="filter-help">Select operator and enter text</div>';
                                 }
 
                                 return `
@@ -1571,9 +2385,223 @@ export class DatabaseExplorer {
                 let columnOrder = [...columns]; // Track column order
                 let filteredData = data.slice();
 
+                // Query interface variables
+                const sampleQueries = ${queriesJson};
+
                 const rowsPerPageSelect = document.getElementById('rowsPerPage');
                 if (rowsPerPageSelect) {
                     rowsPerPageSelect.value = String(rowsPerPage);
+                }
+
+                // Query interface functions
+                function toggleQuerySection() {
+                    const content = document.getElementById('queryContent');
+                    const toggle = document.getElementById('queryToggle');
+                    if (content && toggle) {
+                        content.classList.toggle('expanded');
+                        toggle.textContent = content.classList.contains('expanded') ? '▼' : '▶';
+                    }
+                }
+
+                function loadDataGridSampleQuery() {
+                    const select = document.getElementById('sampleQuerySelect');
+                    const textarea = document.getElementById('queryTextarea');
+                    if (!select || !textarea) return;
+
+                    const idx = parseInt(select.value);
+                    if (!isNaN(idx) && sampleQueries[idx]) {
+                        textarea.value = sampleQueries[idx];
+
+                        // Show warning for destructive queries
+                        const query = sampleQueries[idx].toUpperCase();
+                        if (query.includes('DELETE') || query.includes('DROP')) {
+                            const results = document.getElementById('queryResults');
+                            if (results) {
+                                results.innerHTML = '<div class="query-warning">⚠️ Warning: This is a destructive operation that cannot be undone!</div>';
+                            }
+                        }
+                    }
+                }
+
+                function executeDataGridQuery() {
+                    const textarea = document.getElementById('queryTextarea');
+                    const results = document.getElementById('queryResults');
+                    if (!textarea || !results) return;
+
+                    const query = textarea.value.trim();
+                    if (!query) {
+                        results.innerHTML = '<div class="query-error">Please enter a query</div>';
+                        return;
+                    }
+
+                    results.innerHTML = '<div>Executing query...</div>';
+
+                    vscode.postMessage({
+                        command: 'executeQuery',
+                        query: query
+                    });
+                }
+
+                function clearQueryResults() {
+                    const results = document.getElementById('queryResults');
+                    const textarea = document.getElementById('queryTextarea');
+                    const select = document.getElementById('sampleQuerySelect');
+
+                    if (results) results.innerHTML = '';
+                    if (textarea) textarea.value = '';
+                    if (select) select.value = '';
+                }
+
+                function displayQueryResults(queryData, rowCount) {
+                    const resultsDiv = document.getElementById('queryResults');
+                    if (!resultsDiv) return;
+
+                    if (!queryData) {
+                        resultsDiv.innerHTML = '<div style="padding: 10px; color: var(--text-secondary);">✓ Query executed successfully. No results returned.</div>';
+                        return;
+                    }
+
+                    // Check if result is a single value (not an array)
+                    if (!Array.isArray(queryData)) {
+                        // Handle single value results (SUM, COUNT, AVG, etc.)
+                        let resultHtml = '';
+                        if (typeof queryData === 'object' && queryData !== null) {
+                            // Handle single row result
+                            const entries = Object.entries(queryData);
+                            resultHtml = '<div style="padding: 15px; background-color: var(--bg-secondary); border-radius: 6px; border-left: 4px solid #4caf50;">';
+                            resultHtml += '<div style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px;">Query Result:</div>';
+                            entries.forEach(([key, value]) => {
+                                resultHtml += \`
+                                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-color);">
+                                        <span style="color: var(--text-secondary); font-weight: 500;">\${key}:</span>
+                                        <span style="color: var(--text-primary); font-family: 'Consolas', 'Monaco', 'Courier New', monospace;">\${value}</span>
+                                    </div>
+                                \`;
+                            });
+                            resultHtml += '</div>';
+                        } else {
+                            // Handle single scalar value
+                            resultHtml = \`
+                                <div style="padding: 15px; background-color: var(--bg-secondary); border-radius: 6px; border-left: 4px solid #4caf50;">
+                                    <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px;">Query Result:</div>
+                                    <div style="font-size: 18px; color: var(--accent); font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-weight: 600;">
+                                        \${queryData}
+                                    </div>
+                                </div>
+                            \`;
+                        }
+                        resultsDiv.innerHTML = resultHtml;
+                        return;
+                    }
+
+                    // Handle empty array results
+                    if (queryData.length === 0) {
+                        resultsDiv.innerHTML = '<div style="padding: 10px; color: var(--text-secondary);">✓ Query executed successfully. No rows returned.</div>';
+                        return;
+                    }
+
+                    // Update main table with query results (tabular data)
+                    data = queryData;
+                    filteredData = queryData;
+                    totalRows = rowCount;
+                    currentPage = 1;
+
+                    // Update stats
+                    const statsDiv = document.getElementById('stats');
+                    if (statsDiv) {
+                        statsDiv.textContent = \`Query returned \${rowCount} row(s)\`;
+                    }
+
+                    // Show success message in query results area
+                    resultsDiv.innerHTML = \`<div style="padding: 10px; color: #4caf50;">✓ Query executed successfully. \${rowCount} row(s) displayed in table below.</div>\`;
+
+                    // Re-render the main table with query results
+                    renderTable();
+                }
+
+                function displayQueryError(error) {
+                    const resultsDiv = document.getElementById('queryResults');
+                    if (resultsDiv) {
+                        resultsDiv.innerHTML = \`<div class="query-error">Error: \${error}</div>\`;
+                    }
+                }
+
+                // AI Mode functions
+                let currentQueryMode = 'sql';
+
+                function setQueryMode(mode) {
+                    currentQueryMode = mode;
+                    const sqlBtn = document.getElementById('sqlModeBtn');
+                    const aiBtn = document.getElementById('aiModeBtn');
+                    const sampleRow = document.getElementById('sampleQueryRow');
+                    const aiRow = document.getElementById('aiPromptRow');
+                    const textarea = document.getElementById('queryTextarea');
+                    const executeBtn = document.getElementById('executeBtn');
+                    const generateBtn = document.getElementById('generateBtn');
+
+                    if (mode === 'sql') {
+                        sqlBtn.classList.add('active');
+                        aiBtn.classList.remove('active');
+                        sampleRow.style.display = 'flex';
+                        aiRow.style.display = 'none';
+                        executeBtn.style.display = 'inline-block';
+                        generateBtn.style.display = 'none';
+                        textarea.placeholder = 'Enter your SQL query here...';
+                    } else {
+                        sqlBtn.classList.remove('active');
+                        aiBtn.classList.add('active');
+                        sampleRow.style.display = 'none';
+                        aiRow.style.display = 'flex';
+                        executeBtn.style.display = 'none';
+                        generateBtn.style.display = 'inline-block';
+                        textarea.placeholder = 'Describe what you want to find in plain English...';
+                    }
+                }
+
+                function generateAIQuery() {
+                    const textarea = document.getElementById('queryTextarea');
+                    const results = document.getElementById('queryResults');
+                    if (!textarea || !results) return;
+
+                    const prompt = textarea.value.trim();
+                    if (!prompt) {
+                        results.innerHTML = '<div class="query-error">Please enter a description of what you want to find</div>';
+                        return;
+                    }
+
+                    results.innerHTML = '<div>🤖 Generating SQL query...</div>';
+
+                    vscode.postMessage({
+                        command: 'generateAIQuery',
+                        prompt: prompt
+                    });
+                }
+
+                function displayAIQuery(sqlQuery) {
+                    const textarea = document.getElementById('queryTextarea');
+                    const results = document.getElementById('queryResults');
+                    const executeBtn = document.getElementById('executeBtn');
+                    const generateBtn = document.getElementById('generateBtn');
+
+                    if (textarea) {
+                        textarea.value = sqlQuery;
+                    }
+
+                    if (results) {
+                        results.innerHTML = \`<div style="padding: 10px; color: #4caf50;">✓ SQL query generated successfully. You can now execute it.</div>\`;
+                    }
+
+                    // Switch to SQL mode and show execute button
+                    setQueryMode('sql');
+                    if (executeBtn) executeBtn.style.display = 'inline-block';
+                    if (generateBtn) generateBtn.style.display = 'none';
+                }
+
+                function displayAIError(error) {
+                    const resultsDiv = document.getElementById('queryResults');
+                    if (resultsDiv) {
+                        resultsDiv.innerHTML = \`<div class="query-error">AI Error: \${error}</div>\`;
+                    }
                 }
 
                 function getColumnType(columnIndex) {
@@ -1592,93 +2620,87 @@ export class DatabaseExplorer {
                     });
                 }
 
-                function matchesNumberFilter(value, filterExpr) {
+                function matchesNumberFilter(value, filterData) {
                     if (value === null || value === undefined) return false;
                     const numValue = typeof value === 'number' ? value : parseFloat(value);
                     if (isNaN(numValue)) return false;
 
-                    filterExpr = filterExpr.trim();
+                    const operator = filterData.operator || '=';
+                    const filterValue = parseFloat(filterData.value);
 
-                    // Range: 10-20 or 10..20
-                    if (/^\\d+\\.?\\d*\\s*[-~]\\s*\\d+\\.?\\d*$/.test(filterExpr)) {
-                        const [min, max] = filterExpr.split(/[-~]/).map(s => parseFloat(s.trim()));
-                        return numValue >= min && numValue <= max;
+                    if (isNaN(filterValue)) return false;
+
+                    switch (operator) {
+                        case 'range':
+                            const filterValue2 = parseFloat(filterData.value2);
+                            if (!isNaN(filterValue2)) {
+                                return numValue >= filterValue && numValue <= filterValue2;
+                            }
+                            return false;
+                        case '>=':
+                            return numValue >= filterValue;
+                        case '<=':
+                            return numValue <= filterValue;
+                        case '!=':
+                            return numValue !== filterValue;
+                        case '>':
+                            return numValue > filterValue;
+                        case '<':
+                            return numValue < filterValue;
+                        case '=':
+                        default:
+                            return numValue === filterValue;
                     }
-
-                    // Greater than or equal: >=10
-                    if (filterExpr.startsWith('>=')) {
-                        return numValue >= parseFloat(filterExpr.substring(2));
-                    }
-
-                    // Less than or equal: <=10
-                    if (filterExpr.startsWith('<=')) {
-                        return numValue <= parseFloat(filterExpr.substring(2));
-                    }
-
-                    // Not equal: !=10 or <>10
-                    if (filterExpr.startsWith('!=') || filterExpr.startsWith('<>')) {
-                        return numValue !== parseFloat(filterExpr.substring(2));
-                    }
-
-                    // Greater than: >10
-                    if (filterExpr.startsWith('>')) {
-                        return numValue > parseFloat(filterExpr.substring(1));
-                    }
-
-                    // Less than: <10
-                    if (filterExpr.startsWith('<')) {
-                        return numValue < parseFloat(filterExpr.substring(1));
-                    }
-
-                    // Equal: =10 or just 10
-                    if (filterExpr.startsWith('=')) {
-                        return numValue === parseFloat(filterExpr.substring(1));
-                    }
-
-                    // Just a number
-                    const filterNum = parseFloat(filterExpr);
-                    if (!isNaN(filterNum)) {
-                        return numValue === filterNum;
-                    }
-
-                    return false;
                 }
 
-                function matchesDateFilter(value, filterExpr) {
-                    if (!value || !filterExpr) return false;
+                function matchesDateFilter(value, filterData) {
+                    if (!value || !filterData.value) return false;
                     const dateStr = String(value).substring(0, 10);
-                    filterExpr = filterExpr.trim();
+                    const operator = filterData.operator || '=';
+                    const filterDate = filterData.value.substring(0, 10);
 
-                    // Range: 2024-01-01 to 2024-12-31 or 2024-01-01..2024-12-31
-                    if (/\d{4}-\d{2}-\d{2}\s+(to|-|\.\.)\s+\d{4}-\d{2}-\d{2}/.test(filterExpr)) {
-                        const parts = filterExpr.split(/\s+(to|-|\.\.)\s+/);
-                        const fromDate = parts[0];
-                        const toDate = parts[2] || parts[1];
-                        return dateStr >= fromDate && dateStr <= toDate;
+                    switch (operator) {
+                        case 'range':
+                            const filterDate2 = filterData.value2 ? filterData.value2.substring(0, 10) : null;
+                            if (filterDate2) {
+                                return dateStr >= filterDate && dateStr <= filterDate2;
+                            }
+                            return false;
+                        case '>=':
+                            return dateStr >= filterDate;
+                        case '<=':
+                            return dateStr <= filterDate;
+                        case '>':
+                            return dateStr > filterDate;
+                        case '<':
+                            return dateStr < filterDate;
+                        case '=':
+                            return dateStr === filterDate;
+                        case 'contains':
+                        default:
+                            return dateStr.includes(filterDate) || String(value).toLowerCase().includes(filterData.value.toLowerCase());
                     }
+                }
 
-                    // Greater than or equal: >=2024-01-01
-                    if (filterExpr.startsWith('>=')) {
-                        return dateStr >= filterExpr.substring(2).trim();
+                function matchesStringFilter(value, filterData) {
+                    if (value === null || value === undefined) return false;
+                    const cellStr = String(value).toLowerCase();
+                    const operator = filterData.operator || 'contains';
+                    const filterValue = String(filterData.value).toLowerCase();
+
+                    switch (operator) {
+                        case 'starts':
+                            return cellStr.startsWith(filterValue);
+                        case 'ends':
+                            return cellStr.endsWith(filterValue);
+                        case '!=':
+                            return cellStr !== filterValue;
+                        case '=':
+                            return cellStr === filterValue;
+                        case 'contains':
+                        default:
+                            return cellStr.includes(filterValue);
                     }
-
-                    // Less than or equal: <=2024-01-01
-                    if (filterExpr.startsWith('<=')) {
-                        return dateStr <= filterExpr.substring(2).trim();
-                    }
-
-                    // Greater than: >2024-01-01
-                    if (filterExpr.startsWith('>')) {
-                        return dateStr > filterExpr.substring(1).trim();
-                    }
-
-                    // Less than: <2024-01-01
-                    if (filterExpr.startsWith('<')) {
-                        return dateStr < filterExpr.substring(1).trim();
-                    }
-
-                    // Exact match
-                    return dateStr === filterExpr || dateStr.includes(filterExpr);
                 }
 
                 function filterTable() {
@@ -1697,21 +2719,19 @@ export class DatabaseExplorer {
                         }
 
                         // Apply column-specific filters
-                        for (const [colIndex, filterValue] of Object.entries(columnFilters)) {
-                            if (filterValue && filterValue.trim() !== '') {
+                        for (const [colIndex, filterData] of Object.entries(columnFilters)) {
+                            if (filterData && filterData.value && filterData.value.trim() !== '') {
                                 const colName = columns[parseInt(colIndex)];
                                 const cellValue = row[colName];
                                 const columnType = getColumnType(parseInt(colIndex));
 
                                 let matches = false;
                                 if (columnType === 'number') {
-                                    matches = matchesNumberFilter(cellValue, filterValue);
+                                    matches = matchesNumberFilter(cellValue, filterData);
                                 } else if (columnType === 'date') {
-                                    matches = matchesDateFilter(cellValue, filterValue);
+                                    matches = matchesDateFilter(cellValue, filterData);
                                 } else {
-                                    // String matching
-                                    const cellStr = JSON.stringify(cellValue).toLowerCase();
-                                    matches = cellStr.includes(filterValue.toLowerCase());
+                                    matches = matchesStringFilter(cellValue, filterData);
                                 }
 
                                 if (!matches) {
@@ -1741,13 +2761,24 @@ export class DatabaseExplorer {
                         });
 
                         filterDiv.style.display = 'block';
-                        const input = document.getElementById('filter-input-' + columnIndex);
-                        if (input) {
-                            input.focus();
-                            // Restore previous filter value if it exists
-                            if (columnFilters[columnIndex]) {
-                                input.value = columnFilters[columnIndex];
+                        
+                        // Initialize filter inputs if they exist
+                        const operatorSelect = document.getElementById('filter-operator-' + columnIndex);
+                        const valueInput = document.getElementById('filter-value-' + columnIndex);
+                        const valueInput2 = document.getElementById('filter-value2-' + columnIndex);
+                        
+                        if (operatorSelect && valueInput) {
+                            // Restore previous filter values if they exist
+                            const existingFilter = columnFilters[columnIndex];
+                            if (existingFilter && typeof existingFilter === 'object') {
+                                operatorSelect.value = existingFilter.operator || 'contains';
+                                valueInput.value = existingFilter.value || '';
+                                if (valueInput2 && existingFilter.value2) {
+                                    valueInput2.value = existingFilter.value2;
+                                }
+                                updateFilterInput(columnIndex);
                             }
+                            valueInput.focus();
                         }
                     }
                 }
@@ -1759,12 +2790,50 @@ export class DatabaseExplorer {
                     th.classList.remove('filter-active');
                 }
 
-                function submitColumnFilter(columnIndex) {
-                    const input = document.getElementById('filter-input-' + columnIndex);
-                    const filterValue = input.value;
+                function updateFilterInput(columnIndex) {
+                    const operatorSelect = document.getElementById('filter-operator-' + columnIndex);
+                    const valueInput = document.getElementById('filter-value-' + columnIndex);
+                    const valueInput2 = document.getElementById('filter-value2-' + columnIndex);
+                    
+                    if (!operatorSelect || !valueInput) return;
+                    
+                    const operator = operatorSelect.value;
+                    
+                    // Show/hide second input for range operations
+                    if (valueInput2) {
+                        valueInput2.style.display = operator === 'range' ? 'block' : 'none';
+                    }
+                    
+                    // Update placeholders based on operator
+                    if (operator === 'range') {
+                        valueInput.placeholder = 'Min';
+                    } else if (operator === '>') {
+                        valueInput.placeholder = 'Minimum';
+                    } else if (operator === '<') {
+                        valueInput.placeholder = 'Maximum';
+                    } else {
+                        valueInput.placeholder = 'Value';
+                    }
+                }
 
-                    if (filterValue && filterValue.trim() !== '') {
-                        columnFilters[columnIndex] = filterValue;
+                function submitColumnFilter(columnIndex) {
+                    const operatorSelect = document.getElementById('filter-operator-' + columnIndex);
+                    const valueInput = document.getElementById('filter-value-' + columnIndex);
+                    const valueInput2 = document.getElementById('filter-value2-' + columnIndex);
+                    
+                    if (!operatorSelect || !valueInput) return;
+                    
+                    const operator = operatorSelect.value;
+                    const value = valueInput.value;
+                    const value2 = valueInput2 ? valueInput2.value : '';
+                    
+                    if (value && value.trim() !== '') {
+                        // Store filter as object with operator and value(s)
+                        columnFilters[columnIndex] = {
+                            operator: operator,
+                            value: value,
+                            value2: value2
+                        };
                         const th = document.getElementById('filter-' + columnIndex).parentElement;
                         th.classList.add('filter-active');
                     } else {
@@ -1772,7 +2841,7 @@ export class DatabaseExplorer {
                         const th = document.getElementById('filter-' + columnIndex).parentElement;
                         th.classList.remove('filter-active');
                     }
-
+                    
                     const globalSearch = document.getElementById('searchInput').value.toLowerCase();
                     applyFilters(globalSearch);
                 }
@@ -1928,33 +2997,95 @@ export class DatabaseExplorer {
 
                 function renderTable() {
                     const tbody = document.getElementById('tableBody');
+                    const tableContainer = document.querySelector('.table-container');
                     const pageData = filteredData;
 
                     // DO NOT rebuild headers - they contain stateful filter UI
                     // Headers are built once in the HTML template and should never be destroyed
 
+                    // Handle empty state
+                    if (pageData.length === 0) {
+                        if (tbody) {
+                            tbody.innerHTML = '';
+                        }
+                        
+                        // Keep the table header with filters visible, just empty the tbody
+                        // Don't replace the entire table, just show empty state in tbody
+                        const emptyStateHtml = \`
+                            <tr>
+                                <td colspan="\${allColumns.length}" style="text-align: center; padding: 60px 20px; vertical-align: middle;">
+                                    <div class="empty-state" style="display: block; min-height: auto; padding: 40px;">
+                                        <div class="empty-state-icon">📭</div>
+                                        <div class="empty-state-title">No records found</div>
+                                        <div class="empty-state-message">
+                                            \${data.length === 0 ? 
+                                                'No data available in this table.' : 
+                                                'No records match your current filters. Try adjusting your search criteria or clear all filters.'
+                                            }
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        \`;
+                        
+                        if (tbody) {
+                            tbody.innerHTML = emptyStateHtml;
+                        }
+                        
+                        updateSortIndicators();
+                        updatePagination();
+                        return;
+                    }
+
                     // Render table body respecting column visibility
-                    tbody.innerHTML = pageData.map(row => {
-                        return \`<tr>\${allColumns.map(col => {
-                            const value = row[col];
-                            let cellClass = '';
-                            let formattedValue = '';
+                    if (tbody) {
+                        tbody.innerHTML = pageData.map(row => {
+                            return \`<tr>\${allColumns.map(col => {
+                                const value = row[col];
+                                let cellClass = '';
+                                let formattedValue = '';
 
-                            if (value === null || value === undefined) {
-                                cellClass = 'null';
-                                formattedValue = '<i>NULL</i>';
-                            } else if (typeof value === 'object') {
-                                cellClass = 'object';
-                                formattedValue = JSON.stringify(value);
-                            } else {
-                                cellClass = typeof value;
-                                formattedValue = String(value);
+                                if (value === null || value === undefined) {
+                                    cellClass = 'null';
+                                    formattedValue = '<i>NULL</i>';
+                                } else if (typeof value === 'object') {
+                                    cellClass = 'object';
+                                    formattedValue = JSON.stringify(value);
+                                } else {
+                                    cellClass = typeof value;
+                                    formattedValue = String(value);
+                                }
+
+                                const displayStyle = visibleColumns.includes(col) ? '' : 'display: none;';
+                                return \`<td class="\${cellClass}" style="\${displayStyle}">\${formattedValue}</td>\`;
+                            }).join('')}</tr>\`;
+                        }).join('');
+                    }
+
+                    // Show records found message if filtered
+                    if (filteredData.length < data.length) {
+                        const statsDiv = document.getElementById('stats');
+                        if (statsDiv && !statsDiv.querySelector('.records-found')) {
+                            const recordsFoundMsg = document.createElement('div');
+                            recordsFoundMsg.className = 'records-found';
+                            recordsFoundMsg.textContent = \`\${filteredData.length} of \${data.length} records found\`;
+                            statsDiv.insertBefore(recordsFoundMsg, statsDiv.firstChild);
+                        } else if (statsDiv) {
+                            const existingMsg = statsDiv.querySelector('.records-found');
+                            if (existingMsg) {
+                                existingMsg.textContent = \`\${filteredData.length} of \${data.length} records found\`;
                             }
-
-                            const displayStyle = visibleColumns.includes(col) ? '' : 'display: none;';
-                            return \`<td class="\${cellClass}" style="\${displayStyle}">\${formattedValue}</td>\`;
-                        }).join('')}</tr>\`;
-                    }).join('');
+                        }
+                    } else {
+                        // Remove records found message if not filtered
+                        const statsDiv = document.getElementById('stats');
+                        if (statsDiv) {
+                            const existingMsg = statsDiv.querySelector('.records-found');
+                            if (existingMsg) {
+                                existingMsg.remove();
+                            }
+                        }
+                    }
 
                     updateSortIndicators();
                     updatePagination();
@@ -1994,6 +3125,32 @@ export class DatabaseExplorer {
                     columnFilters = {};
                     sortColumns = [];
                     document.getElementById('searchInput').value = '';
+                    
+                    // Clear all filter UI elements
+                    columns.forEach((_, idx) => {
+                        const operatorSelect = document.getElementById('filter-operator-' + idx);
+                        const valueInput = document.getElementById('filter-value-' + idx);
+                        const valueInput2 = document.getElementById('filter-value2-' + idx);
+
+                        if (operatorSelect) operatorSelect.value = 'contains';
+                        if (valueInput) valueInput.value = '';
+                        if (valueInput2) valueInput2.value = '';
+
+                        const filterElement = document.getElementById('filter-' + idx);
+                        if (filterElement && filterElement.parentElement) {
+                            filterElement.parentElement.classList.remove('filter-active');
+                        }
+                    });
+                    
+                    // Remove records found message
+                    const statsDiv = document.getElementById('stats');
+                    if (statsDiv) {
+                        const existingMsg = statsDiv.querySelector('.records-found');
+                        if (existingMsg) {
+                            existingMsg.remove();
+                        }
+                    }
+                    
                     applySorting();
                     updateSortIndicators();
                     renderTable();
@@ -2248,6 +3405,35 @@ export class DatabaseExplorer {
                         applyFilters(globalSearch);
                     } else if (message.command === 'pageError') {
                         console.error(message.error || 'Failed to load page');
+                    } else if (message.command === 'queryResult') {
+                        displayQueryResults(message.data, message.rowCount);
+                    } else if (message.command === 'queryError') {
+                        displayQueryError(message.error);
+                    } else if (message.command === 'aiQueryResult') {
+                        displayAIQuery(message.sqlQuery);
+                    } else if (message.command === 'aiQueryError') {
+                        displayAIError(message.error);
+                    }
+                });
+
+                // Add click outside filter handler
+                document.addEventListener('click', function(event) {
+                    const target = event.target;
+                    
+                    // Check if click is outside any filter container
+                    const isClickInsideFilter = target.closest('.column-filter') || 
+                                           target.closest('.filter-operator-select') || 
+                                           target.closest('.filter-value-container') ||
+                                           target.closest('th');
+                    
+                    if (!isClickInsideFilter) {
+                        // Hide all visible filters
+                        columns.forEach((_, idx) => {
+                            const filterDiv = document.getElementById('filter-' + idx);
+                            if (filterDiv && filterDiv.style.display === 'block') {
+                                hideColumnFilter(idx);
+                            }
+                        });
                     }
                 });
 
@@ -2311,13 +3497,10 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
 
             const tableCounts = await Promise.all(tableCountPromises);
             
-            const items = tableCounts.map(({ table, count }) => 
+            const items = tableCounts.map(({ table, count }) =>
                 new DatabaseTreeItem(element.connection, table, vscode.TreeItemCollapsibleState.None, 'table', count)
             );
-            
-            // Add query option for tables
-            items.push(new DatabaseTreeItem(element.connection, 'Query', vscode.TreeItemCollapsibleState.None, 'query-console'));
-            
+
             return items;
         }
         return [];

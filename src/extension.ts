@@ -103,6 +103,27 @@ export function activate(context: vscode.ExtensionContext) {
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error opening query console: ${error}`);
                 }
+            }),
+            vscode.commands.registerCommand('simpleDB.queryTable', (item) => {
+                try {
+                    databaseExplorer.queryTable(item);
+                } catch (error) {
+                    vscode.window.showErrorMessage(`Error opening query interface: ${error}`);
+                }
+            }),
+            vscode.commands.registerCommand('simpleDB.exportToJSON', (item) => {
+                try {
+                    databaseExplorer.exportToJSON(item);
+                } catch (error) {
+                    vscode.window.showErrorMessage(`Error exporting to JSON: ${error}`);
+                }
+            }),
+            vscode.commands.registerCommand('simpleDB.exportToCSV', (item) => {
+                try {
+                    databaseExplorer.exportToCSV(item);
+                } catch (error) {
+                    vscode.window.showErrorMessage(`Error exporting to CSV: ${error}`);
+                }
             })
         ];
 

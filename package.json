@@ -2,9 +2,9 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "0.0.252",
+    "version": "0.0.256",
     "publisher": "mmoussa",
-    "icon": "icon.png",
+    "icon": "icon.jpg",
     "categories": [
         "Data Science",
         "Visualization",
@@ -22,7 +22,7 @@
         "sort"
     ],
     "engines": {
-        "vscode": "^1.85.0"
+        "vscode": "^1.105.0"
     },
     "repository": {
         "type": "git",
@@ -85,6 +85,21 @@
                 "command": "simpleDB.openQueryConsole",
                 "title": "Open Query Console",
                 "icon": "$(terminal)"
+            },
+            {
+                "command": "simpleDB.queryTable",
+                "title": "Query Table",
+                "icon": "$(console)"
+            },
+            {
+                "command": "simpleDB.exportToJSON",
+                "title": "Export to JSON",
+                "icon": "$(file-pdf)"
+            },
+            {
+                "command": "simpleDB.exportToCSV",
+                "title": "Export to CSV",
+                "icon": "$(file-excel)"
             }
         ],
         "keybindings": [
@@ -149,6 +164,21 @@
                     "command": "simpleDB.removeConnection",
                     "when": "view == databaseExplorer && viewItem == connection",
                     "group": "inline"
+                },
+                {
+                    "command": "simpleDB.queryTable",
+                    "when": "view == databaseExplorer && viewItem == table",
+                    "group": "inline"
+                },
+                {
+                    "command": "simpleDB.exportToJSON",
+                    "when": "view == databaseExplorer && viewItem == table",
+                    "group": "inline"
+                },
+                {
+                    "command": "simpleDB.exportToCSV",
+                    "when": "view == databaseExplorer && viewItem == table",
+                    "group": "inline"
                 }
             ],
             "explorer/context": [
@@ -192,6 +222,11 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Automatically open SQLite database files when they are opened in the editor"
+                },
+                "simpleDB.openaiApiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "OpenAI API key for AI query generation (can also be set via OPENAI_API_KEY environment variable)"
                 }
             }
         }
@@ -205,7 +240,7 @@
     },
     "devDependencies": {
         "@types/node": "^18.19.130",
-        "@types/vscode": "^1.85.0",
+        "@types/vscode": "^1.105.0",
         "typescript": "^5.0.0"
     },
     "dependencies": {
