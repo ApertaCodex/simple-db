@@ -1,4 +1,4 @@
-.PHONY: build patch-version install install-all-ide install-code install-code-insiders install-windsurf install-cursor install-code-server uninstall uninstall-code uninstall-code-insiders uninstall-windsurf uninstall-cursor uninstall-code-server clean publish
+.PHONY: build build-major build-minor patch-version major-version minor-version install install-all-ide install-code install-code-insiders install-windsurf install-cursor install-code-server uninstall uninstall-code uninstall-code-insiders uninstall-windsurf uninstall-cursor uninstall-code-server clean publish
 
 # Default target
 all: build
@@ -10,10 +10,34 @@ build: patch-version
 	@rm -rf ./simple-db-latest.vsix
 	@cp $(shell ls ./simple-db-*.vsix | head -1) ./simple-db-latest.vsix
 
-# Patch version number
+# Major version and build
+build-major: major-version
+	npm run compile && vsce package
+	@echo "Creating latest version package..."
+	@rm -rf ./simple-db-latest.vsix
+	@cp $(shell ls ./simple-db-*.vsix | head -1) ./simple-db-latest.vsix
+
+# Minor version and build
+build-minor: minor-version
+	npm run compile && vsce package
+	@echo "Creating latest version package..."
+	@rm -rf ./simple-db-latest.vsix
+	@cp $(shell ls ./simple-db-*.vsix | head -1) ./simple-db-latest.vsix
+
+# Patch version number (0.0.x)
 patch-version:
 	@echo "Patching version..."
 	@python3 -c "import json; import sys; data=json.load(open('package.json')); v=data['version'].split('.'); v[2]=str(int(v[2])+1); data['version']='.'.join(v); json.dump(data, open('package.json', 'w'), indent=4)"
+
+# Major version number (x.0.0)
+major-version:
+	@echo "Bumping major version..."
+	@python3 -c "import json; import sys; data=json.load(open('package.json')); v=data['version'].split('.'); v[0]=str(int(v[0])+1); v[1]='0'; v[2]='0'; data['version']='.'.join(v); json.dump(data, open('package.json', 'w'), indent=4)"
+
+# Minor version number (0.x.0)
+minor-version:
+	@echo "Bumping minor version..."
+	@python3 -c "import json; import sys; data=json.load(open('package.json')); v=data['version'].split('.'); v[1]=str(int(v[1])+1); v[2]='0'; data['version']='.'.join(v); json.dump(data, open('package.json', 'w'), indent=4)"
 
 # Install extension in all VS Code instances
 install: build
@@ -121,7 +145,7 @@ uninstall-code-server:
 	code-server --uninstall-extension simple-db.simple-db
 
 # Publish to VS Code Marketplace
-publish: build
+publish:
 	@echo "Publishing extension to VS Code Marketplace..."
 	vsce publish
 	@echo "Extension published successfully"
@@ -137,8 +161,12 @@ clean:
 # Help
 help:
 	@echo "Available targets:"
-	@echo "  build                  - Patch version and build extension"
-	@echo "  patch-version          - Increment patch version number"
+	@echo "  build                  - Patch version and build extension (0.0.x)"
+	@echo "  build-major            - Major version and build extension (x.0.0)"
+	@echo "  build-minor            - Minor version and build extension (0.x.0)"
+	@echo "  patch-version          - Increment patch version number (0.0.x)"
+	@echo "  major-version          - Increment major version number (x.0.0)"
+	@echo "  minor-version          - Increment minor version number (0.x.0)"
 	@echo "  install                - Build and install in all available IDEs"
 	@echo "                          (VS Code, VS Code Insiders, Windsurf, Cursor, code-server)"
 	@echo "  install-all-ide        - Build and install in all available IDEs (alias for install)"
