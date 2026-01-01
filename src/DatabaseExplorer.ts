@@ -8,6 +8,7 @@ interface DatabaseItem {
     type: 'sqlite' | 'mongodb';
     path: string;
     tables: string[];
+    tableCounts?: { [tableName: string]: number };
 }
 
 class DatabaseTreeItem extends vscode.TreeItem {
@@ -15,9 +16,11 @@ class DatabaseTreeItem extends vscode.TreeItem {
         public readonly connection: DatabaseItem,
         public readonly label: string,
         public readonly collapsibleState: vscode.TreeItemCollapsibleState,
-        public readonly contextValue: string
+        public readonly contextValue: string,
+        public readonly recordCount?: number
     ) {
-        super(label, collapsibleState);
+        const displayLabel = recordCount !== undefined ? `${label} (${recordCount})` : label;
+        super(displayLabel, collapsibleState);
         this.tooltip = `${this.connection.name} - ${this.label}`;
         this.contextValue = contextValue;
 
@@ -27,7 +30,7 @@ class DatabaseTreeItem extends vscode.TreeItem {
             this.iconPath = new vscode.ThemeIcon('table');
             // Auto-open table data on click
             this.command = {
-                command: 'databaseViewer.viewData',
+                command: 'simpleDB.viewData',
                 title: 'View Data',
                 arguments: [this]
             };
@@ -42,7 +45,7 @@ export class DatabaseExplorer {
     private _treeDataProvider: DatabaseTreeDataProvider;
     private readonly defaultPageSize = 20;
 
-    constructor(private sqliteManager: SQLiteManager, private mongoManager: MongoDBManager) {
+    constructor(public sqliteManager: SQLiteManager, public mongoManager: MongoDBManager) {
         this._treeDataProvider = new DatabaseTreeDataProvider(this);
         this.loadConnections();
     }
@@ -1925,21 +1928,12 @@ export class DatabaseExplorer {
 
                 function renderTable() {
                     const tbody = document.getElementById('tableBody');
-                    const thead = document.querySelector('#dataTable thead tr');
                     const pageData = filteredData;
 
-                    // Rebuild table headers based on allColumns order and visibility
-                    if (thead) {
-                        thead.innerHTML = allColumns.map(col => {
-                            const isVisible = visibleColumns.includes(col);
-                            const displayStyle = isVisible ? '' : 'display: none;';
-                            return \`<th style="\${displayStyle}">
-                                <span onclick="toggleSort('\${col}')">\${col}</span>
-                            </th>\`;
-                        }).join('');
-                    }
+                    // DO NOT rebuild headers - they contain stateful filter UI
+                    // Headers are built once in the HTML template and should never be destroyed
 
-                    // Render table body using allColumns order and visibility
+                    // Render table body respecting column visibility
                     tbody.innerHTML = pageData.map(row => {
                         return \`<tr>\${allColumns.map(col => {
                             const value = row[col];
@@ -1996,12 +1990,6 @@ export class DatabaseExplorer {
                     console.log('Query console toggle requested');
                 }
 
-                function openColumnManager(event) {
-                    event.stopPropagation();
-                    // This would open column manager popup
-                    console.log('Column manager requested');
-                }
-
                 function clearAllFilters() {
                     columnFilters = {};
                     sortColumns = [];
@@ -2033,57 +2021,80 @@ export class DatabaseExplorer {
 
                 function renderColumnList() {
                     const container = document.getElementById('column-list-content');
+                    // TODO: Column reordering is disabled because the filter/sort system uses
+                    // hardcoded column indices. To re-enable, refactor all filter/sort code
+                    // to use column names instead of indices.
                     container.innerHTML = allColumns.map((col, idx) => \`
-                        <div class="column-item" draggable="true" ondragstart="dragCol(event, \${idx})" ondragover="allowDrop(event)" ondrop="dropCol(event, \${idx})">
-                            <span class="drag-handle">⋮⋮</span>
+                        <div class="column-item">
                             <input type="checkbox" \${visibleColumns.includes(col) ? 'checked' : ''} onchange="toggleColVisibility('\${col}')">
                             <span>\${col}</span>
-                            <div class="column-controls">
-                                <button onclick="moveColIdx(\${idx}, -1)">↑</button>
-                                <button onclick="moveColIdx(\${idx}, 1)">↓</button>
-                            </div>
                         </div>
                     \`).join('');
                 }
 
                 function toggleColVisibility(col) {
+                    const colIndex = allColumns.indexOf(col);
+
                     if (visibleColumns.includes(col)) {
-                        if (visibleColumns.length > 1) visibleColumns = visibleColumns.filter(c => c !== col);
+                        if (visibleColumns.length > 1) {
+                            visibleColumns = visibleColumns.filter(c => c !== col);
+                            // Hide header
+                            const th = document.querySelectorAll('#dataTable thead th')[colIndex];
+                            if (th) th.style.display = 'none';
+                            // Hide all cells in this column
+                            document.querySelectorAll('#dataTable tbody tr').forEach(tr => {
+                                if (tr.children[colIndex]) {
+                                    tr.children[colIndex].style.display = 'none';
+                                }
+                            });
+                        }
                     } else {
                         visibleColumns.push(col);
+                        // Show header
+                        const th = document.querySelectorAll('#dataTable thead th')[colIndex];
+                        if (th) th.style.display = '';
+                        // Show all cells in this column
+                        document.querySelectorAll('#dataTable tbody tr').forEach(tr => {
+                            if (tr.children[colIndex]) {
+                                tr.children[colIndex].style.display = '';
+                            }
+                        });
                     }
-                    renderTable();
                     renderColumnList();
                 }
 
-                function moveColIdx(idx, direction) {
-                    const target = idx + direction;
-                    if (target < 0 || target >= allColumns.length) return;
-                    const temp = allColumns[idx];
-                    allColumns[idx] = allColumns[target];
-                    allColumns[target] = temp;
-                    renderTable();
-                    renderColumnList();
-                }
+                // Column reordering disabled - see renderColumnList() comment
+                // function moveColIdx(idx, direction) {
+                //     const target = idx + direction;
+                //     if (target < 0 || target >= allColumns.length) return;
+                //     const temp = allColumns[idx];
+                //     allColumns[idx] = allColumns[target];
+                //     allColumns[target] = temp;
+                //     renderTable();
+                //     renderColumnList();
+                // }
 
                 function resetColumnOrder() {
-                    allColumns = [...columns];
                     visibleColumns = [...columns];
-                    renderTable();
+                    // Show all headers
+                    document.querySelectorAll('#dataTable thead th').forEach(th => {
+                        th.style.display = '';
+                    });
+                    renderTable(); // Safe now - only updates tbody
                     renderColumnList();
                 }
 
-                // Drag and drop for columns
-                let draggedIdx = null;
-                function dragCol(e, idx) { draggedIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
-                function allowDrop(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
-                function dropCol(e, idx) {
-                    e.preventDefault();
-                    const moving = allColumns.splice(draggedIdx, 1)[0];
-                    allColumns.splice(idx, 0, moving);
-                    renderTable();
-                    renderColumnList();
-                }
+                // Drag and drop for columns - DISABLED
+                // let draggedIdx = null;
+                // function dragCol(e, idx) { draggedIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
+                // function allowDrop(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+                // function dropCol(e, idx) {
+                //     e.preventDefault();
+                //     const moving = allColumns.splice(draggedIdx, 1)[0];
+                //     allColumns.splice(idx, 0, moving);
+                //     renderTable();
+                //     renderColumnList();
+                // }
 
                 // Advanced Filter Functions
                 let activeFilterCol = null;
@@ -2251,13 +2262,13 @@ export class DatabaseExplorer {
     }
 
     private loadConnections() {
-        const config = vscode.workspace.getConfiguration('databaseViewer');
+        const config = vscode.workspace.getConfiguration('simpleDB');
         const connections = config.get<any[]>('connections') || [];
         this.connections = connections;
     }
 
     private saveConnections() {
-        const config = vscode.workspace.getConfiguration('databaseViewer');
+        const config = vscode.workspace.getConfiguration('simpleDB');
         config.update('connections', this.connections, vscode.ConfigurationTarget.Global);
     }
 }
@@ -2276,21 +2287,39 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
         return element;
     }
 
-    getChildren(element?: DatabaseTreeItem): Thenable<DatabaseTreeItem[]> {
+    async getChildren(element?: DatabaseTreeItem): Promise<DatabaseTreeItem[]> {
         if (!element) {
-            return Promise.resolve(this.explorer.connections.map(connection => 
+            return this.explorer.connections.map(connection => 
                 new DatabaseTreeItem(connection, connection.name, vscode.TreeItemCollapsibleState.Expanded, 'connection')
-            ));
+            );
         } else if (element.contextValue === 'connection') {
-            const items = element.connection.tables.map((table: string) => 
-                new DatabaseTreeItem(element.connection, table, vscode.TreeItemCollapsibleState.None, 'table')
+            // Fetch record counts for all tables
+            const tableCountPromises = element.connection.tables.map(async (table: string) => {
+                let count = 0;
+                try {
+                    if (element.connection.type === 'sqlite') {
+                        count = await this.explorer.sqliteManager.getTableRowCount(element.connection.path, table);
+                    } else {
+                        count = await this.explorer.mongoManager.getCollectionCount(element.connection.path, table);
+                    }
+                } catch (error) {
+                    // If count fails, use 0
+                    count = 0;
+                }
+                return { table, count };
+            });
+
+            const tableCounts = await Promise.all(tableCountPromises);
+            
+            const items = tableCounts.map(({ table, count }) => 
+                new DatabaseTreeItem(element.connection, table, vscode.TreeItemCollapsibleState.None, 'table', count)
             );
             
             // Add query option for tables
             items.push(new DatabaseTreeItem(element.connection, 'Query', vscode.TreeItemCollapsibleState.None, 'query-console'));
             
-            return Promise.resolve(items);
+            return items;
         }
-        return Promise.resolve([]);
+        return [];
     }
 }

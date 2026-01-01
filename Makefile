@@ -1,4 +1,4 @@
-.PHONY: build patch-version install install-code install-code-insiders install-windsurf install-cursor install-code-server uninstall uninstall-code uninstall-code-insiders uninstall-windsurf uninstall-cursor uninstall-code-server clean publish
+.PHONY: build patch-version install install-all-ide install-code install-code-insiders install-windsurf install-cursor install-code-server uninstall uninstall-code uninstall-code-insiders uninstall-windsurf uninstall-cursor uninstall-code-server clean publish
 
 # Default target
 all: build
@@ -44,6 +44,9 @@ install: build
 		code-server --install-extension ./simple-db-latest.vsix --force; \
 	fi
 	@echo "Extension installation completed for available IDEs"
+
+# Install extension in all IDEs (alias for install)
+install-all-ide: install
 
 # Install to specific IDE
 install-code-insiders: build
@@ -138,6 +141,7 @@ help:
 	@echo "  patch-version          - Increment patch version number"
 	@echo "  install                - Build and install in all available IDEs"
 	@echo "                          (VS Code, VS Code Insiders, Windsurf, Cursor, code-server)"
+	@echo "  install-all-ide        - Build and install in all available IDEs (alias for install)"
 	@echo "  install-code           - Build and install to VS Code only"
 	@echo "  install-code-insiders  - Build and install to VS Code Insiders only"
 	@echo "  install-windsurf       - Build and install to Windsurf only"

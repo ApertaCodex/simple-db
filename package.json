@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "0.0.245",
+    "version": "0.0.252",
     "publisher": "mmoussa",
     "icon": "icon.png",
     "categories": [
@@ -54,60 +54,60 @@
         },
         "commands": [
             {
-                "command": "databaseViewer.addSQLite",
+                "command": "simpleDB.addSQLite",
                 "title": "Add SQLite Database",
                 "icon": "$(database)"
             },
             {
-                "command": "databaseViewer.addMongoDB",
+                "command": "simpleDB.addMongoDB",
                 "title": "Add MongoDB Connection",
                 "icon": "$(server)"
             },
             {
-                "command": "databaseViewer.refresh",
+                "command": "simpleDB.refresh",
                 "title": "Refresh",
                 "icon": "$(refresh)"
             },
             {
-                "command": "databaseViewer.removeConnection",
+                "command": "simpleDB.removeConnection",
                 "title": "Remove Connection"
             },
             {
-                "command": "databaseViewer.viewData",
+                "command": "simpleDB.viewData",
                 "title": "View Data"
             },
             {
-                "command": "databaseViewer.openSQLiteFile",
+                "command": "simpleDB.openSQLiteFile",
                 "title": "Open SQLite Database",
                 "icon": "$(database)"
             },
             {
-                "command": "databaseViewer.openQueryConsole",
+                "command": "simpleDB.openQueryConsole",
                 "title": "Open Query Console",
                 "icon": "$(terminal)"
             }
         ],
         "keybindings": [
             {
-                "command": "databaseViewer.addSQLite",
+                "command": "simpleDB.addSQLite",
                 "key": "ctrl+shift+d",
                 "mac": "cmd+shift+d",
                 "when": "view == databaseExplorer"
             },
             {
-                "command": "databaseViewer.addMongoDB",
+                "command": "simpleDB.addMongoDB",
                 "key": "ctrl+shift+m",
                 "mac": "cmd+shift+m",
                 "when": "view == databaseExplorer"
             },
             {
-                "command": "databaseViewer.refresh",
+                "command": "simpleDB.refresh",
                 "key": "ctrl+shift+r",
                 "mac": "cmd+shift+r",
                 "when": "view == databaseExplorer"
             },
             {
-                "command": "databaseViewer.openSQLiteFile",
+                "command": "simpleDB.openSQLiteFile",
                 "key": "ctrl+shift+o",
                 "mac": "cmd+shift+o"
             }
@@ -129,31 +129,31 @@
         "menus": {
             "view/title": [
                 {
-                    "command": "databaseViewer.addSQLite",
+                    "command": "simpleDB.addSQLite",
                     "when": "view == databaseExplorer",
                     "group": "navigation"
                 },
                 {
-                    "command": "databaseViewer.addMongoDB",
+                    "command": "simpleDB.addMongoDB",
                     "when": "view == databaseExplorer",
                     "group": "navigation"
                 },
                 {
-                    "command": "databaseViewer.refresh",
+                    "command": "simpleDB.refresh",
                     "when": "view == databaseExplorer",
                     "group": "navigation"
                 }
             ],
             "view/item/context": [
                 {
-                    "command": "databaseViewer.removeConnection",
+                    "command": "simpleDB.removeConnection",
                     "when": "view == databaseExplorer && viewItem == connection",
                     "group": "inline"
                 }
             ],
             "explorer/context": [
                 {
-                    "command": "databaseViewer.openSQLiteFile",
+                    "command": "simpleDB.openSQLiteFile",
                     "when": "resourceExtname == .db || resourceExtname == .sqlite || resourceExtname == .sqlite3",
                     "group": "database"
                 }
@@ -162,7 +162,7 @@
         "configuration": {
             "title": "Simple DB",
             "properties": {
-                "databaseViewer.connections": {
+                "simpleDB.connections": {
                     "type": "array",
                     "default": [],
                     "description": "Database connections configuration",
@@ -188,7 +188,7 @@
                         }
                     }
                 },
-                "databaseViewer.autoOpenSQLiteFiles": {
+                "simpleDB.autoOpenSQLiteFiles": {
                     "type": "boolean",
                     "default": true,
                     "description": "Automatically open SQLite database files when they are opened in the editor"

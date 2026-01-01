@@ -82,7 +82,7 @@ Or search for "Simple DB" in the Extensions view (Ctrl+Shift+X).
 
 ## Configuration
 
-The extension stores database connections in VS Code settings under `databaseViewer.connections`.
+The extension stores database connections in VS Code settings under `simpleDB.connections`.
 
 ## Dependencies
 

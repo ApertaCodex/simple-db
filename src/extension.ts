@@ -50,21 +50,21 @@ export function activate(context: vscode.ExtensionContext) {
         };
 
         const commands = [
-            vscode.commands.registerCommand('databaseViewer.addSQLite', async () => {
+            vscode.commands.registerCommand('simpleDB.addSQLite', async () => {
                 try {
                     await databaseExplorer.addSQLite();
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error adding SQLite database: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('databaseViewer.addMongoDB', async () => {
+            vscode.commands.registerCommand('simpleDB.addMongoDB', async () => {
                 try {
                     await databaseExplorer.addMongoDB();
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error adding MongoDB connection: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('databaseViewer.refresh', async () => {
+            vscode.commands.registerCommand('simpleDB.refresh', async () => {
                 try {
                     // Auto-refresh tables/collections for all connections
                     const connections = databaseExplorer.getConnections();
@@ -76,28 +76,28 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(`Error refreshing: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('databaseViewer.removeConnection', (item) => {
+            vscode.commands.registerCommand('simpleDB.removeConnection', (item) => {
                 try {
                     databaseExplorer.removeConnection(item);
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error removing connection: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('databaseViewer.viewData', (item) => {
+            vscode.commands.registerCommand('simpleDB.viewData', (item) => {
                 try {
                     databaseExplorer.viewData(item);
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error viewing data: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('databaseViewer.openSQLiteFile', (uri) => {
+            vscode.commands.registerCommand('simpleDB.openSQLiteFile', (uri) => {
                 try {
                     openSQLiteFile(uri);
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error opening SQLite file: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('databaseViewer.openQueryConsole', (item) => {
+            vscode.commands.registerCommand('simpleDB.openQueryConsole', (item) => {
                 try {
                     databaseExplorer.openQueryConsole(item);
                 } catch (error) {
@@ -122,7 +122,7 @@ export function activate(context: vscode.ExtensionContext) {
                         
                         if (!existingConnection) {
                             // Auto-open SQLite files when they're opened in the editor
-                            const config = vscode.workspace.getConfiguration('databaseViewer');
+                            const config = vscode.workspace.getConfiguration('simpleDB');
                             if (config.get<boolean>('autoOpenSQLiteFiles', true)) {
                                 // Silently add the database
                                 await openSQLiteFile(document.uri);
