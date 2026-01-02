@@ -1,8 +1,8 @@
 # Simple DB
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/mmoussa.simple-db?style=flat-square&label=Version)](https://marketplace.visualstudio.com/items?itemName=mmoussa.simple-db)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/mmoussa.simple-db?style=flat-square&label=Installs)](https://marketplace.visualstudio.com/items?itemName=mmoussa.simple-db)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/mmoussa.simple-db?style=flat-square&label=Rating)](https://marketplace.visualstudio.com/items?itemName=mmoussa.simple-db)
+[![Version](https://img.shields.io/visual-studio-marketplace/v/apertacodex.simple-db?style=flat-square&label=Version)](https://marketplace.visualstudio.com/items?itemName=apertacodex.simple-db)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/apertacodex.simple-db?style=flat-square&label=Installs)](https://marketplace.visualstudio.com/items?itemName=apertacodex.simple-db)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/apertacodex.simple-db?style=flat-square&label=Rating)](https://marketplace.visualstudio.com/items?itemName=apertacodex.simple-db)
 [![License](https://img.shields.io/github/license/ApertaCodex/simple-db?style=flat-square&label=License)](https://github.com/ApertaCodex/simple-db/blob/master/LICENSE)
 
 A powerful VS Code extension for viewing, filtering, and exploring SQLite and MongoDB databases with an intuitive interface and smart filtering capabilities.
@@ -39,7 +39,7 @@ A powerful VS Code extension for viewing, filtering, and exploring SQLite and Mo
 
 Install from the VS Code Marketplace:
 ```
-ext install mmoussa.simple-db
+ext install apertacodex.simple-db
 ```
 
 Or search for "Simple DB" in the Extensions view (Ctrl+Shift+X).
