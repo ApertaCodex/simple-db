@@ -24,6 +24,6 @@ vsc-extension-quickstart.md
 **/.env.development.local
 **/.env.test.local
 **/.env.production.local
-node_modules/**
+# node_modules/** - commented out to include dependencies (sqlite3, mongoose)
 Makefile
 .env

@@ -1139,33 +1139,270 @@ export class DatabaseExplorer {
 
         // Sample queries based on database type
         const sampleQueries = dbType === 'sqlite' ? [
-            { label: 'Select All Records', query: `SELECT * FROM ${tableName} LIMIT 100` },
-            { label: 'Count Records', query: `SELECT COUNT(*) as total FROM ${tableName}` },
-            { label: 'Select First 10', query: `SELECT * FROM ${tableName} LIMIT 10` },
-            { label: 'Select Distinct Values', query: `SELECT DISTINCT * FROM ${tableName}` },
-            { label: 'Delete All Records', query: `DELETE FROM ${tableName}` },
-            { label: 'Drop Table', query: `DROP TABLE ${tableName}` }
+            { label: 'First 10 Rows', query: `SELECT * FROM ${tableName} LIMIT 10` },
+            { label: 'Count All Records', query: `SELECT COUNT(*) as total FROM ${tableName}` },
+            { label: 'Random 10 Records', query: `SELECT * FROM ${tableName} ORDER BY RANDOM() LIMIT 10` }
         ] : [
             { label: 'Find All Documents', query: `db.${tableName}.find({})` },
             { label: 'Count Documents', query: `db.${tableName}.countDocuments({})` },
-            { label: 'Find First 10', query: `db.${tableName}.find({}).limit(10)` },
-            { label: 'Delete All Documents', query: `db.${tableName}.deleteMany({})` },
-            { label: 'Drop Collection', query: `db.${tableName}.drop()` }
+            { label: 'Find First 10', query: `db.${tableName}.find({}).limit(10)` }
         ];
 
         const sampleOptions = sampleQueries.map((sq, idx) =>
-            `<option value="${idx}">${sq.label}</option>`
+            `<option value="${sq.query}">${sq.label}</option>`
         ).join('');
 
         const queriesJson = JSON.stringify(sampleQueries.map(sq => sq.query));
         
         return `
         <!DOCTYPE html>
-        <html>
+        <html lang="en">
         <head>
-            <meta charset="UTF-8">
-            <title>${tableName}</title>
+            <meta charset="utf-8">
+            <meta content="width=device-width, initial-scale=1.0" name="viewport">
+            <title>${tableName} - Database Explorer</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+            
+            <style>
+                body { font-family: 'Roboto', sans-serif; }
+                h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+                .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+                .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.2); border-radius: 4px; }
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.4); }
+                .custom-scrollbar::-webkit-scrollbar-thumb:active { background: rgba(0, 0, 0, 0.5); }
+                .fade-in { animation: fadeIn 0.15s ease-in-out; }
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+                th.dragging { opacity: 0.4; background-color: #4b5563; border: 2px dashed #6b7280; }
+                th.drag-over-left { border-left: 3px solid #6b7280; }
+                th.drag-over-right { border-right: 3px solid #6b7280; }
+                .sort-badge { font-size: 0.65rem; height: 16px; width: 16px; line-height: 16px; text-align: center; border-radius: 50%; background-color: #4b5563; color: #d1d5db; font-weight: 700; display: inline-block; margin-left: 2px; }
+                
+                /* Loading Overlay */
+                #loadingOverlay {
+                    background: rgba(31, 41, 55, 0.8);
+                    backdrop-filter: blur(2px);
+                }
+            </style>
+        </head>
+
+        <body class="bg-gray-900 text-gray-100 h-screen flex flex-col overflow-hidden">
+
+            <div id="loadingOverlay" class="fixed inset-0 z-50 flex items-center justify-center hidden">
+                <div class="flex flex-col items-center">
+                    <span class="material-symbols-outlined text-4xl animate-spin text-gray-400 mb-2">progress_activity</span>
+                    <span class="text-sm font-medium text-gray-300" id="loadingText">Processing...</span>
+                </div>
+            </div>
+
+            <header class="bg-gray-800 border-b border-gray-700 px-6 py-3 flex items-center justify-between shadow-sm z-20">
+                <div class="flex items-center gap-3">
+                    <div>
+                        <h1 class="text-lg font-semibold text-gray-100 leading-tight">${tableName}</h1>
+                        <p class="text-xs text-gray-400" id="dbMeta">${dbType === 'sqlite' ? 'SQLite Database' : 'MongoDB Collection'}</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <div class="relative">
+                        <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-lg">search</span>
+                        <input class="pl-10 pr-4 py-2 border border-gray-600 rounded-full text-sm focus:outline-none focus:border-gray-500 focus:ring-1 focus:ring-gray-500 w-64 bg-gray-700 text-gray-100 transition-all"
+                            id="globalSearch" placeholder="Search loaded data..." type="text">
+                    </div>
+                    <div class="h-6 w-px bg-gray-600 mx-1"></div>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded-md hover:bg-gray-600 transition-colors"
+                        onclick="toggleQueryPanel()">
+                        <span class="material-symbols-outlined text-lg">terminal</span> <span>Query</span>
+                    </button>
+                    <button class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded-md hover:bg-gray-600 transition-colors"
+                        onclick="exportData()">
+                        <span class="material-symbols-outlined text-lg">download</span> <span>Export</span>
+                    </button>
+                </div>
+            </header>
+
+            <div class="hidden bg-gray-800 border-b border-gray-700 shadow-inner flex-shrink-0 transition-all duration-300 ease-in-out" id="queryPanel">
+                <div class="p-4 max-w-7xl mx-auto">
+                    <div class="flex gap-4 mb-3">
+                        <div class="flex bg-gray-700 p-1 rounded-lg">
+                            <button class="px-4 py-1.5 text-sm font-medium rounded-md shadow-sm bg-gray-600 text-gray-100 transition-all" id="modeSql" onclick="setQueryMode('sql')">SQL</button>
+                            <button class="px-4 py-1.5 text-sm font-medium rounded-md text-gray-400 hover:text-gray-100 transition-all flex items-center gap-1" id="modeAi" onclick="setQueryMode('ai')">
+                                <span class="material-symbols-outlined text-base">radio_button_unchecked</span> AI
+                            </button>
+                        </div>
+                        <div class="flex-1" id="sampleQueriesContainer">
+                            <select class="w-full text-sm border-gray-600 border rounded-md px-3 py-2 focus:ring-gray-500 focus:border-gray-500 bg-gray-700 text-gray-100" id="sampleQueries" onchange="loadSampleQuery(this.value)">
+                                <option value="">-- Load a Sample Query --</option>
+                                ${sampleOptions}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="relative">
+                        <textarea class="w-full font-mono text-sm bg-gray-700 border border-gray-600 rounded-lg p-4 focus:ring-2 focus:ring-gray-500 focus:border-gray-500 outline-none transition-all resize-y text-gray-100"
+                            id="queryInput" placeholder="SELECT * FROM..." rows="4"></textarea>
+                        <div class="absolute bottom-3 right-3 flex gap-2">
+                            <button class="px-3 py-1.5 text-xs font-medium text-gray-400 bg-gray-700 border border-gray-600 rounded hover:bg-gray-600" onclick="clearQuery()">Clear</button>
+                            <button class="px-4 py-1.5 text-xs font-bold text-gray-100 bg-gray-600 rounded hover:bg-gray-500 shadow-sm flex items-center gap-1" onclick="executeCustomQuery()">
+                                <span class="material-symbols-outlined text-sm">play_arrow</span> Run
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mt-2 text-xs text-gray-400 hidden" id="queryStatus"></div>
+                </div>
+            </div>
+
+            <div class="px-6 py-3 bg-gray-800 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-sm font-medium text-gray-300 bg-gray-700 px-2 py-1 rounded" id="totalRecords">${data.length} Records</span>
+                    <span class="hidden text-xs font-medium text-gray-400 bg-gray-700 px-2 py-1 rounded border border-gray-600 flex items-center gap-1 cursor-pointer hover:bg-gray-600"
+                        id="filterBadge" onclick="clearAllFilters()">
+                        Filters Active <span class="material-symbols-outlined text-xs">close</span>
+                    </span>
+                    <span class="text-xs text-gray-500 ml-2 italic hidden md:inline">Shift+Click to multi-sort. Drag headers to reorder.</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded hover:bg-gray-600 hover:text-slate-400 transition-colors"
+                        onclick="toggleColumnManager(event)">
+                        <span class="material-symbols-outlined text-lg">view_column</span> Columns
+                    </button>
+                    <button class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded hover:bg-gray-600 transition-colors"
+                        onclick="resetView()">
+                        <span class="material-symbols-outlined text-lg">restart_alt</span> Reset
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-auto relative custom-scrollbar bg-gray-800">
+                <table class="w-full text-left border-collapse">
+                    <thead class="bg-gray-700 sticky top-0 z-10 shadow-sm text-xs uppercase text-gray-400 font-semibold tracking-wider">
+                        <tr id="tableHeaderRow">
+                            ${columns.map((col, index) => `
+                                <th draggable="true"
+                                    class="px-6 py-3 border-b border-gray-600 group hover:bg-gray-600 transition-colors select-none cursor-pointer relative" 
+                                    onclick="handleSort(event, '${col}')"
+                                    ondragstart="handleDragStart(event, '${col}')" ondragover="handleDragOver(event, '${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '${col}')">
+                                    <div class="flex items-center justify-between">
+                                        <span class="flex items-center gap-1">
+                                            <span class="material-symbols-outlined text-gray-500 text-sm cursor-grab active:cursor-grabbing mr-1">drag_indicator</span>
+                                            ${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                        </span>
+                                        <div class="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onclick="openFilter(event, '${col}')" 
+                                                class="p-1 rounded hover:bg-gray-500 text-gray-500">
+                                                <span class="material-symbols-outlined text-base">filter_alt</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </th>
+                            `).join('')}
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700 text-sm text-gray-300" id="tableBody">
+                        ${data.map(row => `
+                            <tr class="hover:bg-gray-700 transition-colors group border-b border-gray-700 last:border-0">
+                                ${columns.map(col => {
+                                    const val = row[col];
+                                    let content = val;
+                                    let cls = '';
+                                    
+                                    if (val === null || val === undefined) {
+                                        content = '<span class="text-gray-500 italic">null</span>';
+                                    } else if (typeof val === 'boolean') {
+                                        content = val ?
+                                            `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">TRUE</span>` :
+                                            `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">FALSE</span>`;
+                                    } else if (typeof val === 'number') {
+                                        cls = 'font-mono text-gray-400';
+                                    } else if (typeof val === 'string' && val.includes('@') && col.toLowerCase().includes('email')) {
+                                        content = `<a href="mailto:${val}" class="text-gray-400 hover:text-gray-300">${val}</a>`;
+                                    } else if (typeof val === 'string' && val.length > 50) {
+                                        content = val.substring(0, 50) + '...';
+                                        cls = 'text-xs text-gray-500';
+                                    }
+
+                                    return `<td class="px-6 py-3 whitespace-nowrap ${cls}">${content}</td>`;
+                                }).join('')}
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+
+            <footer class="bg-gray-800 border-t border-gray-700 px-6 py-3 flex items-center justify-between flex-shrink-0 text-sm">
+                <div class="flex items-center gap-2 text-gray-400">
+                    <span>Rows:</span>
+                    <select class="border-gray-600 border rounded py-1 px-2 focus:ring-gray-500 focus:border-gray-500 bg-gray-700 text-gray-300 cursor-pointer"
+                        id="rowsPerPage" onchange="changeRowsPerPage(this.value)">
+                        <option value="10">10</option>
+                        <option selected value="20">20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-gray-400" id="pageInfo">Page 1 of 1</span>
+                    <div class="flex gap-1">
+                        <button class="p-1 rounded hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-gray-400"
+                            id="btnPrev" onclick="prevPage()" disabled>
+                            <span class="material-symbols-outlined">chevron_left</span>
+                        </button>
+                        <button class="p-1 rounded hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-gray-400"
+                            id="btnNext" onclick="nextPage()" disabled>
+                            <span class="material-symbols-outlined">chevron_right</span>
+                        </button>
+                    </div>
+                </div>
+            </footer>
+
+            <div class="hidden absolute z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl w-64 text-sm fade-in"
+                id="columnManager" style="top: 130px; right: 24px;">
+                <div class="p-3 border-b border-gray-600 bg-gray-700 rounded-t-lg flex justify-between items-center">
+                    <span class="font-semibold text-gray-200">Manage Columns</span>
+                    <button class="text-gray-400 hover:text-gray-200" onclick="document.getElementById('columnManager').classList.add('hidden')"><span class="material-symbols-outlined text-lg">close</span></button>
+                </div>
+                <div class="p-2 max-h-64 overflow-y-auto custom-scrollbar" id="columnList"></div>
+            </div>
+
+            <div class="hidden absolute z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl w-80 text-sm fade-in" id="filterPopover">
+                <div class="p-3 border-b border-gray-600 bg-gray-700 rounded-t-lg flex justify-between items-center">
+                    <span class="font-semibold text-gray-200" id="filterTitle">Filter Column</span>
+                    <button class="text-gray-400 hover:text-gray-200" onclick="closeFilterPopover()"><span class="material-symbols-outlined text-lg">close</span></button>
+                </div>
+                <div class="p-4 space-y-3" id="filterContent"></div>
+                <div class="p-3 border-t border-gray-600 bg-gray-700 rounded-b-lg flex justify-end gap-2">
+                    <button class="px-3 py-1.5 text-gray-400 hover:bg-gray-600 rounded border border-gray-600 bg-gray-700" onclick="clearCurrentFilter()">Clear</button>
+                    <button class="px-3 py-1.5 text-gray-100 bg-gray-600 hover:bg-gray-500 rounded shadow-sm" onclick="applyCurrentFilter()">Apply</button>
+                </div>
+            </div>
+
             <script>
+                const vscode = acquireVsCodeApi();
+                
+                // --- 1. Global State & Variables ---
+                let allData = ${JSON.stringify(data)};
+                let filteredData = [...allData];
+                let columns = ${JSON.stringify(columns)};
+                let visibleColumns = [...columns];
+                let columnStats = {};
+                let sortConfig = [];
+                let draggedColumn = null;
+
+                let state = {
+                    currentPage: 1,
+                    rowsPerPage: ${pageSize},
+                    columnFilters: {},
+                    globalSearch: ''
+                };
+
+                let totalRows = ${totalRows};
+
+                // --- 2. Utility Functions ---
+                function formatColumnName(col) { 
+                    return col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); 
+                }
+
                 function getCellClass(value) {
                     if (value === null || value === undefined) return 'null';
                     if (typeof value === 'boolean') return 'boolean';
@@ -1188,2260 +1425,564 @@ export class DatabaseExplorer {
                     }
                     return String(value);
                 }
-            </script>
-            <style>
-                :root {
-                    --bg-primary: #1e1e1e;
-                    --bg-secondary: #252526;
-                    --bg-tertiary: #2d2d30;
-                    --border-color: #3e3e42;
-                    --text-primary: #cccccc;
-                    --text-secondary: #969696;
-                    --accent: #007acc;
-                    --accent-hover: #1a8ad6;
-                    --row-hover: #2a2d2e;
-                    --header-bg: #333333;
-                }
-
-                * {
-                    box-sizing: border-box;
-                }
-
-                body {
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    margin: 0;
-                    padding: 20px;
-                    background-color: var(--bg-primary);
-                    color: var(--text-primary);
-                    font-size: 13px;
-                    line-height: 1.4;
-                }
-
-                h2 {
-                    color: var(--text-primary);
-                    font-weight: 400;
-                    margin-bottom: 20px;
-                    font-size: 18px;
-                }
-
-                .search {
-                    margin-bottom: 20px;
-                    position: relative;
-                }
-
-                .search input {
-                    width: 100%;
-                    max-width: 400px;
-                    padding: 8px 12px 8px 36px;
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 4px;
-                    color: var(--text-primary);
-                    font-size: 13px;
-                    outline: none;
-                    transition: border-color 0.2s;
-                }
-
-                .search-icon {
-                    position: absolute;
-                    left: 12px;
-                    top: 50%;
-                    transform: translateY(-50%);
-                    color: var(--text-secondary);
-                    pointer-events: none;
-                    z-index: 1;
-                }
-
-                .search input:focus {
-                    border-color: var(--accent);
-                }
-
-                .search input::placeholder {
-                    color: var(--text-secondary);
-                }
-
-                .toolbar {
-                    display: flex;
-                    gap: 8px;
-                    margin-bottom: 16px;
-                    flex-wrap: wrap;
-                }
-
-                .toolbar-btn {
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    padding: 8px 12px;
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 4px;
-                    color: var(--text-primary);
-                    font-size: 12px;
-                    cursor: pointer;
-                    transition: all 0.2s;
-                }
-
-                .toolbar-btn:hover {
-                    background-color: var(--bg-tertiary);
-                    border-color: var(--accent);
-                }
-
-                .toolbar-btn svg {
-                    width: 16px;
-                    height: 16px;
-                }
-
-                .pagination-controls {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 16px;
-                    padding: 12px 0;
-                    border-top: 1px solid var(--border-color);
-                    border-bottom: 1px solid var(--border-color);
-                }
-
-                .pagination-info {
-                    color: var(--text-secondary);
-                    font-size: 12px;
-                }
-
-                .pagination-buttons {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                }
-
-                .pagination-buttons select {
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    padding: 4px 8px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                }
-
-                .pagination-buttons button {
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    cursor: pointer;
-                    transition: all 0.2s;
-                }
-
-                .pagination-buttons button:hover:not(:disabled) {
-                    background-color: var(--bg-tertiary);
-                    border-color: var(--accent);
-                }
-
-                .pagination-buttons button:disabled {
-                    opacity: 0.5;
-                    cursor: not-allowed;
-                }
-
-                /* Popover Styles */
-                .popover {
-                    position: fixed;
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 6px;
-                    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-                    z-index: 1000;
-                    min-width: 240px;
-                    max-width: 320px;
-                }
-
-                .popover-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    padding: 12px 16px;
-                    border-bottom: 1px solid var(--border-color);
-                    background-color: var(--bg-tertiary);
-                    border-radius: 6px 6px 0 0;
-                }
-
-                .popover-title {
-                    font-size: 11px;
-                    font-weight: 600;
-                    text-transform: uppercase;
-                    letter-spacing: 0.5px;
-                    color: var(--accent);
-                }
-
-                .popover-close {
-                    background: none;
-                    border: none;
-                    color: var(--text-secondary);
-                    font-size: 18px;
-                    cursor: pointer;
-                    padding: 0;
-                    width: 24px;
-                    height: 24px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    border-radius: 4px;
-                    transition: all 0.2s;
-                }
-
-                .popover-close:hover {
-                    background-color: var(--bg-tertiary);
-                    color: var(--text-primary);
-                }
-
-                .popover-content {
-                    padding: 16px;
-                    max-height: 300px;
-                    overflow-y: auto;
-                }
-
-                .popover-footer {
-                    padding: 12px 16px;
-                    border-top: 1px solid var(--border-color);
-                    background-color: var(--bg-tertiary);
-                    border-radius: 0 0 6px 6px;
-                    display: flex;
-                    gap: 8px;
-                    justify-content: flex-end;
-                }
-
-                .popover-btn {
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    font-weight: 500;
-                    cursor: pointer;
-                    transition: all 0.2s;
-                    border: 1px solid transparent;
-                }
-
-                .popover-btn.primary {
-                    background-color: var(--accent);
-                    color: white;
-                    border-color: var(--accent);
-                }
-
-                .popover-btn.primary:hover {
-                    background-color: var(--accent-hover);
-                    border-color: var(--accent-hover);
-                }
-
-                .popover-btn.secondary {
-                    background-color: var(--bg-tertiary);
-                    color: var(--text-primary);
-                    border-color: var(--border-color);
-                }
-
-                .popover-btn.secondary:hover {
-                    background-color: var(--row-hover);
-                    border-color: var(--accent);
-                }
-
-                .column-list {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 4px;
-                }
-
-                .column-item {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    padding: 8px 12px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    transition: background-color 0.2s;
-                }
-
-                .column-item:hover {
-                    background-color: var(--row-hover);
-                }
-
-                .column-item.dragging {
-                    opacity: 0.5;
-                    background-color: var(--accent);
-                }
-
-                .drag-handle {
-                    cursor: grab;
-                    color: var(--text-secondary);
-                    font-size: 14px;
-                }
-
-                .drag-handle:active {
-                    cursor: grabbing;
-                }
-
-                /* Filter Controls */
-                .filter-label {
-                    display: block;
-                    font-size: 10px;
-                    color: var(--text-secondary);
-                    margin-bottom: 4px;
-                    text-transform: uppercase;
-                    font-weight: 600;
-                    letter-spacing: 0.5px;
-                }
-
-                .filter-input {
-                    width: 100%;
-                    background-color: var(--input-bg);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    padding: 6px 8px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    outline: none;
-                    transition: border-color 0.2s;
-                }
-
-                .filter-input:focus {
-                    border-color: var(--accent);
-                }
-
-                .filter-select {
-                    width: 100%;
-                    background-color: var(--input-bg);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    padding: 6px 8px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    outline: none;
-                    transition: border-color 0.2s;
-                    margin-bottom: 8px;
-                }
-
-                .filter-select:focus {
-                    border-color: var(--accent);
-                }
-
-                .column-controls {
-                    display: flex;
-                    gap: 2px;
-                    margin-left: auto;
-                }
-
-                .column-controls button {
-                    padding: 2px 4px;
-                    background-color: var(--bg-tertiary);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-secondary);
-                    border-radius: 2px;
-                    font-size: 10px;
-                    cursor: pointer;
-                    transition: all 0.2s;
-                }
-
-                .column-controls button:hover {
-                    background-color: var(--row-hover);
-                    color: var(--text-primary);
-                }
-
-                .table-container {
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 4px;
-                    overflow: auto;
-                    max-height: 70vh;
-                    min-height: 500px;
-                }
-
-                table {
-                    border-collapse: collapse;
-                    min-width: 100%;
-                    font-size: 12px;
-                }
-
-                th, td {
-                    padding: 12px 16px;
-                    text-align: left;
-                    border-bottom: 1px solid var(--border-color);
-                    vertical-align: top;
-                }
-
-                th {
-                    background-color: var(--header-bg);
-                    color: var(--text-primary);
-                    font-weight: 600;
-                    font-size: 14px;
-                    cursor: pointer;
-                    user-select: none;
-                    position: sticky;
-                    top: 0;
-                    z-index: 10;
-                    transition: background-color 0.2s;
-                    position: relative;
-                    padding-bottom: 0;
-                    white-space: nowrap;
-                    height: 44px;
-                }
-
-                td {
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    max-width: 300px;
-                }
-
-                .column-filter {
-                    position: absolute;
-                    top: 100%;
-                    left: 0;
-                    right: 0;
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    border-top: none;
-                    z-index: 20;
-                    display: none;
-                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-                    min-width: 200px;
-                }
-
-                .filter-input-container {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 6px;
-                    padding: 8px;
-                }
-
-                .filter-operator-select {
-                    width: 100%;
-                    background-color: var(--bg-primary);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    padding: 4px 6px;
-                    border-radius: 3px;
-                    font-size: 11px;
-                    outline: none;
-                    margin-bottom: 4px;
-                }
-
-                .filter-operator-select:focus {
-                    border-color: var(--accent);
-                }
-
-                .filter-value-container {
-                    display: flex;
-                    gap: 4px;
-                    align-items: center;
-                }
-
-                .filter-text-input,
-                .filter-number-input,
-                .filter-date-input {
-                    flex: 1;
-                    padding: 4px 6px;
-                    background-color: var(--bg-primary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 3px;
-                    color: var(--text-primary);
-                    font-size: 11px;
-                    outline: none;
-                }
-
-                .filter-text-input:focus,
-                .filter-number-input:focus,
-                .filter-date-input:focus {
-                    background-color: var(--bg-tertiary);
-                    border-color: var(--accent);
-                }
-
-                .filter-number-second,
-                .filter-date-second {
-                    display: none;
-                }
-
-                .filter-date-input[type="date"]::-webkit-calendar-picker-indicator {
-                    filter: invert(1);
-                    cursor: pointer;
-                }
-
-                .filter-date-input[type="date"]::-webkit-calendar-picker-indicator:hover {
-                    filter: invert(0.8);
-                }
-
-                .column-filter input {
-                    flex: 1;
-                    padding: 6px 8px;
-                    background-color: var(--bg-primary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 3px;
-                    color: var(--text-primary);
-                    font-size: 11px;
-                    outline: none;
-                }
-
-                .column-filter input[type="date"] {
-                    padding: 4px 8px;
-                }
-
-                .column-filter input:focus {
-                    background-color: var(--bg-tertiary);
-                    border-color: var(--accent);
-                }
-
-                .filter-btn {
-                    padding: 6px 10px;
-                    background-color: var(--accent);
-                    border: none;
-                    border-radius: 3px;
-                    color: white;
-                    cursor: pointer;
-                    font-size: 14px;
-                    transition: background-color 0.2s;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    min-width: 32px;
-                }
-
-                .filter-btn:hover {
-                    background-color: var(--accent-hover);
-                }
-
-                .filter-btn:active {
-                    transform: scale(0.98);
-                }
-
-                .filter-btn::before {
-                    content: '🔍';
-                }
-
-                .filter-help {
-                    padding: 4px 8px;
-                    font-size: 10px;
-                    color: var(--text-secondary);
-                    background-color: var(--bg-tertiary);
-                    border-top: 1px solid var(--border-color);
-                }
-
-                th.filter-active {
-                    background-color: var(--accent);
-                }
-
-                .filter-icon {
-                    margin-left: 8px;
-                    opacity: 0.5;
-                    font-size: 14px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    transition: all 0.2s;
-                    cursor: pointer;
-                    color: var(--text-secondary);
-                    vertical-align: middle;
-                    line-height: 1;
-                    width: 16px;
-                    height: 16px;
-                    position: relative;
-                }
-
-                .filter-icon::before {
-                    content: '';
-                    position: absolute;
-                    width: 10px;
-                    height: 10px;
-                    border: 1.5px solid currentColor;
-                    border-radius: 50%;
-                    top: 0;
-                    left: 0;
-                }
-
-                .filter-icon::after {
-                    content: '';
-                    position: absolute;
-                    width: 4px;
-                    height: 4px;
-                    border-right: 1.5px solid currentColor;
-                    border-bottom: 1.5px solid currentColor;
-                    transform: rotate(45deg);
-                    bottom: 1px;
-                    right: 1px;
-                }
-
-                th:hover .filter-icon {
-                    opacity: 0.8;
-                    color: var(--accent);
-                }
-
-                th.filter-active .filter-icon {
-                    opacity: 1;
-                    color: var(--accent);
-                }
-
-                .filter-icon:hover {
-                    opacity: 1 !important;
-                    transform: scale(1.15);
-                    color: var(--accent);
-                }
-
-                .header-search-icon {
-                    margin-left: 4px;
-                    color: var(--text-secondary);
-                    opacity: 0.5;
-                    transition: all 0.2s;
-                    cursor: pointer;
-                }
-
-                .header-search-icon:hover {
-                    opacity: 0.8;
-                    color: var(--accent);
-                }
-
-                th:hover .header-search-icon {
-                    opacity: 0.8;
-                    color: var(--accent);
-                }
-
-                th:hover {
-                    background-color: var(--bg-tertiary);
-                }
-
-                th.sort-asc {
-                    background-color: var(--accent);
-                    color: white;
-                }
-
-                th.sort-desc {
-                    background-color: var(--accent);
-                    color: white;
-                }
-
-                .sort-indicator {
-                    margin-left: 8px;
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 2px;
-                }
-
-                .sort-indicator svg {
-                    width: 16px;
-                    height: 16px;
-                    color: var(--accent);
-                    opacity: 0.8;
-                }
-
-                .sort-priority {
-                    font-size: 10px;
-                    font-weight: bold;
-                    color: var(--accent);
-                    background-color: rgba(0, 122, 204, 0.1);
-                    border-radius: 50%;
-                    width: 14px;
-                    height: 14px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    line-height: 1;
-                }
-
-                th.sort-asc .sort-indicator svg,
-                th.sort-desc .sort-indicator svg {
-                    color: white;
-                    opacity: 1;
-                }
-
-                th.sort-asc .sort-priority,
-                th.sort-desc .sort-priority {
-                    background-color: rgba(255, 255, 255, 0.2);
-                    color: white;
-                }
-
-                th:first-child,
-                td:first-child {
-                    padding-left: 16px;
-                }
-
-                th:last-child,
-                td:last-child {
-                    padding-right: 16px;
-                }
-
-                tr:hover td {
-                    background-color: var(--row-hover);
-                }
-
-                td {
-                    color: var(--text-primary);
-                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-                    font-size: 11px;
-                }
-
-                td.number {
-                    text-align: right;
-                    font-weight: 500;
-                }
-
-                td.string {
-                    color: #ce9178;
-                }
-
-                td.boolean {
-                    color: #569cd6;
-                    font-weight: 600;
-                }
-
-                td.null {
-                    color: var(--text-secondary);
-                    font-style: italic;
-                }
-
-                .pagination {
-                    margin-top: 20px;
-                    display: flex;
-                    align-items: center;
-                    gap: 16px;
-                    padding: 12px 0;
-                }
-
-                .pagination button {
-                    background-color: var(--bg-secondary);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 12px;
-                    transition: all 0.2s;
-                }
-
-                .pagination button:hover:not(:disabled) {
-                    background-color: var(--accent);
-                    border-color: var(--accent);
-                }
-
-                .pagination button:disabled {
-                    opacity: 0.5;
-                    cursor: not-allowed;
-                }
-
-                #pageInfo {
-                    color: var(--text-secondary);
-                    font-size: 12px;
-                }
-
-                .stats {
-                    margin-bottom: 16px;
-                    color: var(--text-secondary);
-                    font-size: 12px;
-                }
-
-                ::-webkit-scrollbar {
-                    width: 12px;
-                    height: 12px;
-                }
-
-                ::-webkit-scrollbar-track {
-                    background: var(--bg-primary);
-                }
-
-                ::-webkit-scrollbar-thumb {
-                    background: var(--border-color);
-                    border-radius: 6px;
-                }
-
-                ::-webkit-scrollbar-thumb:hover {
-                    background: #555555;
-                }
-
-                .hidden {
-                    display: none !important;
-                }
-
-                .empty-state {
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 60px 20px;
-                    text-align: center;
-                    color: var(--text-secondary);
-                    min-height: 400px;
-                }
-
-                .empty-state-icon {
-                    font-size: 48px;
-                    margin-bottom: 16px;
-                    opacity: 0.5;
-                }
-
-                .empty-state-title {
-                    font-size: 16px;
-                    font-weight: 600;
-                    margin-bottom: 8px;
-                    color: var(--text-primary);
-                }
-
-                .empty-state-message {
-                    font-size: 13px;
-                    line-height: 1.4;
-                    max-width: 400px;
-                }
-
-                .records-found {
-                    background-color: rgba(76, 175, 80, 0.1);
-                    color: #4caf50;
-                    padding: 8px 12px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    margin-bottom: 8px;
-                    border-left: 3px solid #4caf50;
-                }
-
-                .query-section {
-                    margin-bottom: 20px;
-                    border: 1px solid var(--border-color);
-                    border-radius: 4px;
-                    overflow: hidden;
-                }
-
-                .query-header {
-                    background-color: var(--bg-secondary);
-                    padding: 10px 16px;
-                    cursor: pointer;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    user-select: none;
-                }
-
-                .query-header:hover {
-                    background-color: var(--accent-dim);
-                }
-
-                .query-content {
-                    padding: 16px;
-                    display: none;
-                }
-
-                .query-content.expanded {
-                    display: block;
-                }
-
-                .query-row {
-                    display: flex;
-                    gap: 10px;
-                    margin-bottom: 10px;
-                    align-items: center;
-                }
-
-                .query-row label {
-                    min-width: 120px;
-                    color: var(--text-secondary);
-                }
-
-                .query-row select {
-                    flex: 1;
-                    padding: 6px 12px;
-                    background-color: var(--bg-primary);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    border-radius: 3px;
-                }
-
-                .query-textarea {
-                    width: 100%;
-                    min-height: 100px;
-                    padding: 10px;
-                    font-family: 'Courier New', monospace;
-                    font-size: 13px;
-                    background-color: var(--bg-primary);
-                    color: var(--text-primary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 3px;
-                    resize: vertical;
-                }
-
-                .query-actions {
-                    display: flex;
-                    gap: 10px;
-                    margin-top: 10px;
-                }
-
-                .query-btn {
-                    padding: 8px 16px;
-                    background-color: var(--accent);
-                    color: var(--text-primary);
-                    border: none;
-                    border-radius: 3px;
-                    cursor: pointer;
-                }
-
-                .query-btn:hover {
-                    opacity: 0.8;
-                }
-
-                .query-results {
-                    margin-top: 16px;
-                    padding: 10px;
-                    background-color: var(--bg-secondary);
-                    border-radius: 3px;
-                    max-height: 400px;
-                    overflow: auto;
-                }
-
-                .query-results table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    font-size: 12px;
-                }
-
-                .query-results th,
-                .query-results td {
-                    padding: 6px 8px;
-                    border: 1px solid var(--border-color);
-                    text-align: left;
-                }
-
-                .query-results th {
-                    background-color: var(--accent-dim);
-                    font-weight: 600;
-                }
-
-                .query-error {
-                    color: #f48771;
-                    background-color: rgba(244, 135, 113, 0.1);
-                    padding: 10px;
-                    border-radius: 3px;
-                }
-
-                .query-warning {
-                    background-color: #856404;
-                    color: #fff3cd;
-                    padding: 10px;
-                    border-radius: 3px;
-                    margin-bottom: 10px;
-                }
-
-                .query-mode-toggle {
-                    display: flex;
-                    background-color: var(--bg-primary);
-                    border: 1px solid var(--border-color);
-                    border-radius: 4px;
-                    overflow: hidden;
-                }
-
-                .mode-btn {
-                    padding: 6px 12px;
-                    background-color: transparent;
-                    border: none;
-                    color: var(--text-secondary);
-                    cursor: pointer;
-                    transition: all 0.2s;
-                    font-size: 12px;
-                }
-
-                .mode-btn.active {
-                    background-color: var(--accent);
-                    color: var(--text-primary);
-                }
-
-                .mode-btn:hover:not(.active) {
-                    background-color: var(--row-hover);
-                    color: var(--text-primary);
-                }
-
-                .ai-prompt-examples {
-                    flex: 1;
-                    color: var(--text-secondary);
-                    font-style: italic;
-                    font-size: 11px;
-                }
-            </style>
-        </head>
-        <body>
-            <h2>${tableName}</h2>
-
-            <div class="query-section">
-                <div class="query-header" onclick="toggleQuerySection()">
-                    <span>📝 SQL Query Interface</span>
-                    <span id="queryToggle">▶</span>
-                </div>
-                <div class="query-content" id="queryContent">
-                    <div class="query-row">
-                        <label>Mode:</label>
-                        <div class="query-mode-toggle">
-                            <button type="button" id="sqlModeBtn" class="mode-btn active" onclick="setQueryMode('sql')">SQL</button>
-                            <button type="button" id="aiModeBtn" class="mode-btn" onclick="setQueryMode('ai')">🤖 AI</button>
-                        </div>
-                    </div>
-                    <div class="query-row" id="sampleQueryRow">
-                        <label>Sample Queries:</label>
-                        <select id="sampleQuerySelect" onchange="loadDataGridSampleQuery()">
-                            <option value="">-- Select a query --</option>
-                            ${sampleOptions}
-                        </select>
-                    </div>
-                    <div class="query-row" id="aiPromptRow" style="display: none;">
-                        <label>AI Prompt:</label>
-                        <div class="ai-prompt-examples">
-                            <small>Examples: "Show me all users who registered last month", "Find the top 10 most expensive products", "Count orders by status"</small>
-                        </div>
-                    </div>
-                    <textarea class="query-textarea" id="queryTextarea" placeholder="Enter your SQL query here..."></textarea>
-                    <div class="query-actions">
-                        <button class="query-btn" id="executeBtn" onclick="executeDataGridQuery()">Execute Query</button>
-                        <button class="query-btn" id="generateBtn" onclick="generateAIQuery()" style="display: none;">Generate SQL</button>
-                        <button class="query-btn" onclick="clearQueryResults()">Clear</button>
-                    </div>
-                    <div id="queryResults"></div>
-                </div>
-            </div>
-
-            <div class="stats" id="stats">Showing ${data.length} of ${totalRows} rows</div>
-            <div class="search">
-                <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m21 21-4.34-4.34"/>
-                    <circle cx="11" cy="11" r="8"/>
-                </svg>
-                <input type="text" id="searchInput" placeholder="Search..." onkeyup="filterTable()">
-            </div>
-            
-            <div class="toolbar">
-                <button class="toolbar-btn" onclick="openColumnManager(event)" title="Manage Columns">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M3 3h18v18H3zM9 9h6"/>
-                        <path d="M9 15h6"/>
-                    </svg>
-                    Columns
-                </button>
-                <button class="toolbar-btn" onclick="clearAllFilters()" title="Clear All Filters">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M22 3H2l8 9.46V19l4 2 4-2V12.46L22 3z"/>
-                        <path d="M6 12h12"/>
-                    </svg>
-                    Reset
-                </button>
-            </div>
-            
-            <div class="pagination-controls">
-                <div class="pagination-info">
-                    <span id="recordCount">Showing ${data.length} of ${totalRows} rows</span>
-                </div>
-                <div class="pagination-buttons">
-                    <select id="rowsPerPage" onchange="changeRowsPerPage(this.value)">
-                        <option value="10">10</option>
-                        <option value="20" selected>20</option>
-                        <option value="50">50</option>
-                        <option value="100">100</option>
-                    </select>
-                    <button onclick="prevPage()" id="prevBtn" disabled>Previous</button>
-                    <span id="pageInfo">1 / 1</span>
-                    <button onclick="nextPage()" id="nextBtn" disabled>Next</button>
-                </div>
-            </div>
-            <div class="table-container">
-                <table id="dataTable">
-                    <thead>
-                        <tr>
-                            ${columns.map((col, idx) => {
-                                const firstValue = data.find(row => row[col] != null)?.[col];
-                                const isNumber = typeof firstValue === 'number';
-                                const isDate = typeof firstValue === 'string' && /^\d{4}-\d{2}-\d{2}/.test(firstValue);
-
-                                let filterInput = '';
-                                let helpText = '';
 
-                                if (isDate) {
-                                    filterInput = `<div class="filter-input-container">
-                                        <select class="filter-operator-select" id="filter-operator-${idx}" onchange="updateFilterInput(${idx})">
-                                            <option value="contains">Contains</option>
-                                            <option value="=">=</option>
-                                            <option value=">">After</option>
-                                            <option value="<">Before</option>
-                                            <option value=">=">On or After</option>
-                                            <option value="<=">On or Before</option>
-                                            <option value="range">Between</option>
-                                        </select>
-                                        <div class="filter-value-container">
-                                            <input type="date" class="filter-date-input" id="filter-value-${idx}" 
-                                                   onchange="submitColumnFilter(${idx})">
-                                            <input type="date" class="filter-date-input filter-date-second" id="filter-value2-${idx}" 
-                                                   style="display: none;" onchange="submitColumnFilter(${idx})">
-                                        </div>
-                                        <button class="filter-btn" onclick="submitColumnFilter(${idx})"></button>
-                                    </div>`;
-                                    helpText = '<div class="filter-help">Select operator and choose date(s)</div>';
-                                } else if (isNumber) {
-                                    filterInput = `<div class="filter-input-container">
-                                        <select class="filter-operator-select" id="filter-operator-${idx}" onchange="updateFilterInput(${idx})">
-                                            <option value="=">=</option>
-                                            <option value=">">></option>
-                                            <option value="<"><</option>
-                                            <option value=">=">>=</option>
-                                            <option value="<="><=</option>
-                                            <option value="!=">!=</option>
-                                            <option value="range">Range</option>
-                                        </select>
-                                        <div class="filter-value-container">
-                                            <input type="number" class="filter-number-input" id="filter-value-${idx}" 
-                                                   placeholder="Value" onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})">
-                                            <input type="number" class="filter-number-input filter-number-second" id="filter-value2-${idx}" 
-                                                   placeholder="Max" style="display: none;" onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})">
-                                        </div>
-                                        <button class="filter-btn" onclick="submitColumnFilter(${idx})"></button>
-                                    </div>`;
-                                    helpText = '<div class="filter-help">Select operator and enter value(s)</div>';
-                                } else {
-                                    filterInput = `<div class="filter-input-container">
-                                        <select class="filter-operator-select" id="filter-operator-${idx}" onchange="updateFilterInput(${idx})">
-                                            <option value="contains">Contains</option>
-                                            <option value="=">=</option>
-                                            <option value="!=">!=</option>
-                                            <option value="starts">Starts with</option>
-                                            <option value="ends">Ends with</option>
-                                        </select>
-                                        <div class="filter-value-container">
-                                            <input type="text" class="filter-text-input" id="filter-value-${idx}" 
-                                                   placeholder="Filter ${col}..." onkeypress="if(event.key==='Enter') submitColumnFilter(${idx})">
-                                        </div>
-                                        <button class="filter-btn" onclick="submitColumnFilter(${idx})"></button>
-                                    </div>`;
-                                    helpText = '<div class="filter-help">Select operator and enter text</div>';
+                // --- 3. Smart Column Analysis (Enums) ---
+                function analyzeColumns() {
+                    columnStats = {};
+                    const palette = [
+                        { bg: 'bg-slate-100', text: 'text-slate-800' }, { bg: 'bg-green-100', text: 'text-green-800' },
+                        { bg: 'bg-purple-100', text: 'text-purple-800' }, { bg: 'bg-yellow-100', text: 'text-yellow-800' },
+                        { bg: 'bg-indigo-100', text: 'text-indigo-800' }, { bg: 'bg-pink-100', text: 'text-pink-800' },
+                        { bg: 'bg-gray-100', text: 'text-gray-800' }, { bg: 'bg-red-100', text: 'text-red-800' },
+                        { bg: 'bg-orange-100', text: 'text-orange-800' }
+                    ];
+
+                    if(allData.length === 0) return;
+
+                    columns.forEach(col => {
+                        const sampleVal = allData[0][col];
+                        const type = typeof sampleVal;
+                        
+                        // Identify Enums: Low cardinality strings
+                        if (type === 'string' && !col.toLowerCase().includes('email') && !col.toLowerCase().includes('id') && !col.toLowerCase().includes('name')) {
+                            const uniqueValues = new Set(allData.map(d => d[col]));
+                            if (uniqueValues.size < 20 && uniqueValues.size > 1 && allData.length > 20) {
+                                const valueColorMap = {};
+                                let colorIdx = 0;
+                                Array.from(uniqueValues).sort().forEach(val => {
+                                    valueColorMap[val] = palette[colorIdx % palette.length];
+                                    colorIdx++;
+                                });
+                                columnStats[col] = { isEnum: true, options: Array.from(uniqueValues).sort(), colorMap: valueColorMap };
+                                return;
+                            }
+                        }
+                        columnStats[col] = { isEnum: false, options: [] };
+                    });
+                }
+
+                // --- 4. Rendering Logic ---
+                function initTable() {
+                    renderHeader();
+                    renderBody();
+                }
+
+                function renderHeader() {
+                    const tr = document.getElementById('tableHeaderRow');
+                    tr.innerHTML = visibleColumns.map((col, index) => {
+                        const sortIndex = sortConfig.findIndex(s => s.col === col);
+                        const isSorted = sortIndex !== -1;
+                        const sortDir = isSorted ? sortConfig[sortIndex].dir : null;
+                        const isFiltered = state.columnFilters[col];
+
+                        return \`
+                        <th draggable="true"
+                            class="px-6 py-3 border-b border-gray-600 group hover:bg-gray-600 transition-colors select-none cursor-pointer relative" 
+                            onclick="handleSort(event, '\${col}')"
+                            ondragstart="handleDragStart(event, '\${col}')" ondragover="handleDragOver(event, '\${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '\${col}')">
+                            <div class="flex items-center justify-between">
+                                <span class="flex items-center gap-1 \${isSorted ? 'text-gray-100 font-bold' : ''}">
+                                    <span class="material-symbols-outlined text-gray-500 text-sm cursor-grab active:cursor-grabbing mr-1">drag_indicator</span>
+                                    \${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                    \${isSorted ? \`<span class="material-symbols-outlined text-sm font-bold">\${sortDir === 'asc' ? 'arrow_upward' : 'arrow_downward'}</span>\` : ''}
+                                    \${(isSorted && sortConfig.length > 1) ? \`<span class="sort-badge">\${sortIndex + 1}</span>\` : ''}
+                                </span>
+                                <div class="flex items-center opacity-0 group-hover:opacity-100 \${isFiltered ? 'opacity-100' : ''} transition-opacity">
+                                    <button onclick="openFilter(event, '\${col}')" 
+                                        class="p-1 rounded hover:bg-gray-500 \${isFiltered ? 'text-gray-100 bg-gray-600' : 'text-gray-500'}">
+                                        <span class="material-symbols-outlined text-base">filter_alt</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </th>
+                    \`;
+                    }).join('');
+                }
+
+                function renderBody() {
+                    const tbody = document.getElementById('tableBody');
+                    
+                    if (filteredData.length === 0) {
+                        if(allData.length > 0) {
+                             tbody.innerHTML = \`<tr><td colspan="\${visibleColumns.length}" class="px-6 py-8 text-center text-gray-400">No records found matching your filters.</td></tr>\`;
+                        } else {
+                             tbody.innerHTML = ''; // Show empty state
+                        }
+                        return;
+                    }
+
+                    const start = (state.currentPage - 1) * state.rowsPerPage;
+                    const end = start + state.rowsPerPage;
+                    const pageData = filteredData.slice(start, end);
+
+                    tbody.innerHTML = pageData.map((row) => \`
+                        <tr class="hover:bg-slate-50/50 transition-colors group border-b border-gray-100 last:border-0">
+                            \${visibleColumns.map(col => {
+                                const val = row[col];
+                                let content = val;
+                                let cls = '';
+                                const stats = columnStats[col];
+
+                                if (val === null || val === undefined) {
+                                    content = '<span class="text-gray-300 italic">null</span>';
+                                } else if (stats && stats.isEnum) {
+                                    const color = stats.colorMap[val] || { bg: 'bg-gray-100', text: 'text-gray-800' };
+                                    content = \`<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium \${color.bg} \${color.text}">\${val}</span>\`;
+                                } else if (typeof val === 'boolean' || (typeof val === 'number' && (val === 0 || val === 1) && col.toLowerCase().includes('is_'))) {
+                                    const boolVal = typeof val === 'boolean' ? val : val === 1;
+                                    content = boolVal ?
+                                        \`<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">TRUE</span>\` :
+                                        \`<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">FALSE</span>\`;
+                                } else if (typeof val === 'number') {
+                                    cls = 'font-mono text-gray-600';
+                                } else if (typeof val === 'string' && val.includes('@') && col.toLowerCase().includes('email')) {
+                                    content = \`<a href="mailto:\${val}" class="text-slate-600 hover:underline">\${val}</a>\`;
+                                } else if (typeof val === 'string' && val.length > 50) {
+                                    content = val.substring(0, 50) + '...';
+                                    cls = 'text-xs text-gray-500';
                                 }
 
-                                return `
-                                <th onclick="sortTable(${idx}, event)" oncontextmenu="event.preventDefault(); toggleColumnFilter(${idx})">
-                                    <span style="display: flex; align-items: center; justify-content: space-between;">
-                                        <span>${col}</span>
-                                        <svg class="header-search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" title="Click to filter this column" onclick="event.stopPropagation(); toggleColumnFilter(${idx})">
-                                            <path d="m21 21-4.34-4.34"/>
-                                            <circle cx="11" cy="11" r="8"/>
-                                        </svg>
-                                    </span>
-                                    <div class="column-filter" id="filter-${idx}">
-                                        ${filterInput}
-                                        ${helpText}
-                                    </div>
-                                </th>
-                            `;
+                                return \`<td class="px-6 py-3 whitespace-nowrap \${cls}">\${content}</td>\`;
                             }).join('')}
                         </tr>
-                    </thead>
-                    <tbody id="tableBody">
-                        ${data.map(row => `
-                            <tr>
-                                ${columns.map(col => `<td class="${this.getCellClass(row[col])}">${this.formatCellValue(row[col])}</td>`).join('')}
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>
-            <div class="pagination">
-                <button onclick="previousPage()">Previous</button>
-                <span id="pageInfo">Page 1 of 1</span>
-                <button onclick="nextPage()">Next</button>
-            </div>
-
-            <!-- Column Manager Popup -->
-            <div class="popover hidden" id="column-manager">
-                <div class="popover-header">
-                    <span class="popover-title">Manage Columns</span>
-                    <button class="popover-close" onclick="closeColumnManager()">×</button>
-                </div>
-                <div class="popover-content">
-                    <div class="column-list" id="column-list-content">
-                        <!-- Column list will be populated by JavaScript -->
-                    </div>
-                </div>
-                <div class="popover-footer">
-                    <button class="popover-btn" onclick="resetColumnOrder()">Reset Order & Visibility</button>
-                </div>
-            </div>
-
-            <!-- Advanced Filter Popup -->
-            <div class="popover hidden" id="advanced-filter-popup">
-                <div class="popover-header">
-                    <span class="popover-title" id="filter-title">Column Filter</span>
-                    <button class="popover-close" onclick="closeFilterPopup()">×</button>
-                </div>
-                <div class="popover-content">
-                    <div id="filter-controls">
-                        <!-- Filter controls will be populated by JavaScript -->
-                    </div>
-                </div>
-                <div class="popover-footer">
-                    <button class="popover-btn secondary" onclick="clearCurrentFilter()">Clear</button>
-                    <button class="popover-btn primary" onclick="applyFilter()">Apply</button>
-                </div>
-            </div>
-
-            <script>
-                const vscode = acquireVsCodeApi();
-                let data = ${JSON.stringify(data)};
-                const columns = ${JSON.stringify(columns)};
-                let totalRows = ${totalRows};
-                let currentPage = 1;
-                let rowsPerPage = ${pageSize};
-                let sortColumns = []; // Array of {columnIndex, direction} for multi-sort
-                let columnFilters = {};
-                let allColumns = [...columns]; // Store all columns for column manager
-                let visibleColumns = [...columns]; // Track visible columns
-                let columnOrder = [...columns]; // Track column order
-                let filteredData = data.slice();
-
-                // Query interface variables
-                const sampleQueries = ${queriesJson};
-
-                const rowsPerPageSelect = document.getElementById('rowsPerPage');
-                if (rowsPerPageSelect) {
-                    rowsPerPageSelect.value = String(rowsPerPage);
-                }
-
-                // Query interface functions
-                function toggleQuerySection() {
-                    const content = document.getElementById('queryContent');
-                    const toggle = document.getElementById('queryToggle');
-                    if (content && toggle) {
-                        content.classList.toggle('expanded');
-                        toggle.textContent = content.classList.contains('expanded') ? '▼' : '▶';
-                    }
-                }
-
-                function loadDataGridSampleQuery() {
-                    const select = document.getElementById('sampleQuerySelect');
-                    const textarea = document.getElementById('queryTextarea');
-                    if (!select || !textarea) return;
-
-                    const idx = parseInt(select.value);
-                    if (!isNaN(idx) && sampleQueries[idx]) {
-                        textarea.value = sampleQueries[idx];
-
-                        // Show warning for destructive queries
-                        const query = sampleQueries[idx].toUpperCase();
-                        if (query.includes('DELETE') || query.includes('DROP')) {
-                            const results = document.getElementById('queryResults');
-                            if (results) {
-                                results.innerHTML = '<div class="query-warning">⚠️ Warning: This is a destructive operation that cannot be undone!</div>';
-                            }
-                        }
-                    }
-                }
-
-                function executeDataGridQuery() {
-                    const textarea = document.getElementById('queryTextarea');
-                    const results = document.getElementById('queryResults');
-                    if (!textarea || !results) return;
-
-                    const query = textarea.value.trim();
-                    if (!query) {
-                        results.innerHTML = '<div class="query-error">Please enter a query</div>';
-                        return;
-                    }
-
-                    results.innerHTML = '<div>Executing query...</div>';
-
-                    vscode.postMessage({
-                        command: 'executeQuery',
-                        query: query
-                    });
-                }
-
-                function clearQueryResults() {
-                    const results = document.getElementById('queryResults');
-                    const textarea = document.getElementById('queryTextarea');
-                    const select = document.getElementById('sampleQuerySelect');
-
-                    if (results) results.innerHTML = '';
-                    if (textarea) textarea.value = '';
-                    if (select) select.value = '';
-                }
-
-                function displayQueryResults(queryData, rowCount) {
-                    const resultsDiv = document.getElementById('queryResults');
-                    if (!resultsDiv) return;
-
-                    if (!queryData) {
-                        resultsDiv.innerHTML = '<div style="padding: 10px; color: var(--text-secondary);">✓ Query executed successfully. No results returned.</div>';
-                        return;
-                    }
-
-                    // Check if result is a single value (not an array)
-                    if (!Array.isArray(queryData)) {
-                        // Handle single value results (SUM, COUNT, AVG, etc.)
-                        let resultHtml = '';
-                        if (typeof queryData === 'object' && queryData !== null) {
-                            // Handle single row result
-                            const entries = Object.entries(queryData);
-                            resultHtml = '<div style="padding: 15px; background-color: var(--bg-secondary); border-radius: 6px; border-left: 4px solid #4caf50;">';
-                            resultHtml += '<div style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px;">Query Result:</div>';
-                            entries.forEach(([key, value]) => {
-                                resultHtml += \`
-                                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-color);">
-                                        <span style="color: var(--text-secondary); font-weight: 500;">\${key}:</span>
-                                        <span style="color: var(--text-primary); font-family: 'Consolas', 'Monaco', 'Courier New', monospace;">\${value}</span>
-                                    </div>
-                                \`;
-                            });
-                            resultHtml += '</div>';
-                        } else {
-                            // Handle single scalar value
-                            resultHtml = \`
-                                <div style="padding: 15px; background-color: var(--bg-secondary); border-radius: 6px; border-left: 4px solid #4caf50;">
-                                    <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 10px;">Query Result:</div>
-                                    <div style="font-size: 18px; color: var(--accent); font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-weight: 600;">
-                                        \${queryData}
-                                    </div>
-                                </div>
-                            \`;
-                        }
-                        resultsDiv.innerHTML = resultHtml;
-                        return;
-                    }
-
-                    // Handle empty array results
-                    if (queryData.length === 0) {
-                        resultsDiv.innerHTML = '<div style="padding: 10px; color: var(--text-secondary);">✓ Query executed successfully. No rows returned.</div>';
-                        return;
-                    }
-
-                    // Update main table with query results (tabular data)
-                    data = queryData;
-                    filteredData = queryData;
-                    totalRows = rowCount;
-                    currentPage = 1;
-
-                    // Update stats
-                    const statsDiv = document.getElementById('stats');
-                    if (statsDiv) {
-                        statsDiv.textContent = \`Query returned \${rowCount} row(s)\`;
-                    }
-
-                    // Show success message in query results area
-                    resultsDiv.innerHTML = \`<div style="padding: 10px; color: #4caf50;">✓ Query executed successfully. \${rowCount} row(s) displayed in table below.</div>\`;
-
-                    // Re-render the main table with query results
-                    renderTable();
-                }
-
-                function displayQueryError(error) {
-                    const resultsDiv = document.getElementById('queryResults');
-                    if (resultsDiv) {
-                        resultsDiv.innerHTML = \`<div class="query-error">Error: \${error}</div>\`;
-                    }
-                }
-
-                // AI Mode functions
-                let currentQueryMode = 'sql';
-
-                function setQueryMode(mode) {
-                    currentQueryMode = mode;
-                    const sqlBtn = document.getElementById('sqlModeBtn');
-                    const aiBtn = document.getElementById('aiModeBtn');
-                    const sampleRow = document.getElementById('sampleQueryRow');
-                    const aiRow = document.getElementById('aiPromptRow');
-                    const textarea = document.getElementById('queryTextarea');
-                    const executeBtn = document.getElementById('executeBtn');
-                    const generateBtn = document.getElementById('generateBtn');
-
-                    if (mode === 'sql') {
-                        sqlBtn.classList.add('active');
-                        aiBtn.classList.remove('active');
-                        sampleRow.style.display = 'flex';
-                        aiRow.style.display = 'none';
-                        executeBtn.style.display = 'inline-block';
-                        generateBtn.style.display = 'none';
-                        textarea.placeholder = 'Enter your SQL query here...';
-                    } else {
-                        sqlBtn.classList.remove('active');
-                        aiBtn.classList.add('active');
-                        sampleRow.style.display = 'none';
-                        aiRow.style.display = 'flex';
-                        executeBtn.style.display = 'none';
-                        generateBtn.style.display = 'inline-block';
-                        textarea.placeholder = 'Describe what you want to find in plain English...';
-                    }
-                }
-
-                function generateAIQuery() {
-                    const textarea = document.getElementById('queryTextarea');
-                    const results = document.getElementById('queryResults');
-                    if (!textarea || !results) return;
-
-                    const prompt = textarea.value.trim();
-                    if (!prompt) {
-                        results.innerHTML = '<div class="query-error">Please enter a description of what you want to find</div>';
-                        return;
-                    }
-
-                    results.innerHTML = '<div>🤖 Generating SQL query...</div>';
-
-                    vscode.postMessage({
-                        command: 'generateAIQuery',
-                        prompt: prompt
-                    });
-                }
-
-                function displayAIQuery(sqlQuery) {
-                    const textarea = document.getElementById('queryTextarea');
-                    const results = document.getElementById('queryResults');
-                    const executeBtn = document.getElementById('executeBtn');
-                    const generateBtn = document.getElementById('generateBtn');
-
-                    if (textarea) {
-                        textarea.value = sqlQuery;
-                    }
-
-                    if (results) {
-                        results.innerHTML = \`<div style="padding: 10px; color: #4caf50;">✓ SQL query generated successfully. You can now execute it.</div>\`;
-                    }
-
-                    // Switch to SQL mode and show execute button
-                    setQueryMode('sql');
-                    if (executeBtn) executeBtn.style.display = 'inline-block';
-                    if (generateBtn) generateBtn.style.display = 'none';
-                }
-
-                function displayAIError(error) {
-                    const resultsDiv = document.getElementById('queryResults');
-                    if (resultsDiv) {
-                        resultsDiv.innerHTML = \`<div class="query-error">AI Error: \${error}</div>\`;
-                    }
-                }
-
-                function getColumnType(columnIndex) {
-                    const colName = columns[columnIndex];
-                    const firstValue = data.find(row => row[colName] != null)?.[colName];
-                    if (typeof firstValue === 'number') return 'number';
-                    if (typeof firstValue === 'string' && /^\\d{4}-\\d{2}-\\d{2}/.test(firstValue)) return 'date';
-                    return 'string';
-                }
-
-                function requestPage(page, pageSize) {
-                    vscode.postMessage({
-                        command: 'loadPage',
-                        page: page,
-                        pageSize: pageSize
-                    });
-                }
-
-                function matchesNumberFilter(value, filterData) {
-                    if (value === null || value === undefined) return false;
-                    const numValue = typeof value === 'number' ? value : parseFloat(value);
-                    if (isNaN(numValue)) return false;
-
-                    const operator = filterData.operator || '=';
-                    const filterValue = parseFloat(filterData.value);
-
-                    if (isNaN(filterValue)) return false;
-
-                    switch (operator) {
-                        case 'range':
-                            const filterValue2 = parseFloat(filterData.value2);
-                            if (!isNaN(filterValue2)) {
-                                return numValue >= filterValue && numValue <= filterValue2;
-                            }
-                            return false;
-                        case '>=':
-                            return numValue >= filterValue;
-                        case '<=':
-                            return numValue <= filterValue;
-                        case '!=':
-                            return numValue !== filterValue;
-                        case '>':
-                            return numValue > filterValue;
-                        case '<':
-                            return numValue < filterValue;
-                        case '=':
-                        default:
-                            return numValue === filterValue;
-                    }
-                }
-
-                function matchesDateFilter(value, filterData) {
-                    if (!value || !filterData.value) return false;
-                    const dateStr = String(value).substring(0, 10);
-                    const operator = filterData.operator || '=';
-                    const filterDate = filterData.value.substring(0, 10);
-
-                    switch (operator) {
-                        case 'range':
-                            const filterDate2 = filterData.value2 ? filterData.value2.substring(0, 10) : null;
-                            if (filterDate2) {
-                                return dateStr >= filterDate && dateStr <= filterDate2;
-                            }
-                            return false;
-                        case '>=':
-                            return dateStr >= filterDate;
-                        case '<=':
-                            return dateStr <= filterDate;
-                        case '>':
-                            return dateStr > filterDate;
-                        case '<':
-                            return dateStr < filterDate;
-                        case '=':
-                            return dateStr === filterDate;
-                        case 'contains':
-                        default:
-                            return dateStr.includes(filterDate) || String(value).toLowerCase().includes(filterData.value.toLowerCase());
-                    }
-                }
-
-                function matchesStringFilter(value, filterData) {
-                    if (value === null || value === undefined) return false;
-                    const cellStr = String(value).toLowerCase();
-                    const operator = filterData.operator || 'contains';
-                    const filterValue = String(filterData.value).toLowerCase();
-
-                    switch (operator) {
-                        case 'starts':
-                            return cellStr.startsWith(filterValue);
-                        case 'ends':
-                            return cellStr.endsWith(filterValue);
-                        case '!=':
-                            return cellStr !== filterValue;
-                        case '=':
-                            return cellStr === filterValue;
-                        case 'contains':
-                        default:
-                            return cellStr.includes(filterValue);
-                    }
-                }
-
-                function filterTable() {
-                    const input = document.getElementById('searchInput').value.toLowerCase();
-                    applyFilters(input);
-                }
-
-                function applyFilters(globalSearch = '') {
-                    filteredData = data.filter(row => {
-                        // Apply global search filter
-                        if (globalSearch) {
-                            const matchesGlobal = columns.some(col =>
-                                JSON.stringify(row[col]).toLowerCase().includes(globalSearch)
-                            );
-                            if (!matchesGlobal) return false;
-                        }
-
-                        // Apply column-specific filters
-                        for (const [colIndex, filterData] of Object.entries(columnFilters)) {
-                            if (filterData && filterData.value && filterData.value.trim() !== '') {
-                                const colName = columns[parseInt(colIndex)];
-                                const cellValue = row[colName];
-                                const columnType = getColumnType(parseInt(colIndex));
-
-                                let matches = false;
-                                if (columnType === 'number') {
-                                    matches = matchesNumberFilter(cellValue, filterData);
-                                } else if (columnType === 'date') {
-                                    matches = matchesDateFilter(cellValue, filterData);
-                                } else {
-                                    matches = matchesStringFilter(cellValue, filterData);
-                                }
-
-                                if (!matches) {
-                                    return false;
-                                }
-                            }
-                        }
-
-                        return true;
-                    });
-                    applySorting();
-                    renderTable();
-                }
-
-                function toggleColumnFilter(columnIndex) {
-                    const filterDiv = document.getElementById('filter-' + columnIndex);
-                    const th = filterDiv.parentElement;
-
-                    if (filterDiv.style.display === 'block') {
-                        hideColumnFilter(columnIndex);
-                    } else {
-                        // Hide all other filters
-                        columns.forEach((_, idx) => {
-                            if (idx !== columnIndex) {
-                                hideColumnFilter(idx);
-                            }
-                        });
-
-                        filterDiv.style.display = 'block';
-                        
-                        // Initialize filter inputs if they exist
-                        const operatorSelect = document.getElementById('filter-operator-' + columnIndex);
-                        const valueInput = document.getElementById('filter-value-' + columnIndex);
-                        const valueInput2 = document.getElementById('filter-value2-' + columnIndex);
-                        
-                        if (operatorSelect && valueInput) {
-                            // Restore previous filter values if they exist
-                            const existingFilter = columnFilters[columnIndex];
-                            if (existingFilter && typeof existingFilter === 'object') {
-                                operatorSelect.value = existingFilter.operator || 'contains';
-                                valueInput.value = existingFilter.value || '';
-                                if (valueInput2 && existingFilter.value2) {
-                                    valueInput2.value = existingFilter.value2;
-                                }
-                                updateFilterInput(columnIndex);
-                            }
-                            valueInput.focus();
-                        }
-                    }
-                }
-
-                function hideColumnFilter(columnIndex) {
-                    const filterDiv = document.getElementById('filter-' + columnIndex);
-                    const th = filterDiv.parentElement;
-                    filterDiv.style.display = 'none';
-                    th.classList.remove('filter-active');
-                }
-
-                function updateFilterInput(columnIndex) {
-                    const operatorSelect = document.getElementById('filter-operator-' + columnIndex);
-                    const valueInput = document.getElementById('filter-value-' + columnIndex);
-                    const valueInput2 = document.getElementById('filter-value2-' + columnIndex);
-                    
-                    if (!operatorSelect || !valueInput) return;
-                    
-                    const operator = operatorSelect.value;
-                    
-                    // Show/hide second input for range operations
-                    if (valueInput2) {
-                        valueInput2.style.display = operator === 'range' ? 'block' : 'none';
-                    }
-                    
-                    // Update placeholders based on operator
-                    if (operator === 'range') {
-                        valueInput.placeholder = 'Min';
-                    } else if (operator === '>') {
-                        valueInput.placeholder = 'Minimum';
-                    } else if (operator === '<') {
-                        valueInput.placeholder = 'Maximum';
-                    } else {
-                        valueInput.placeholder = 'Value';
-                    }
-                }
-
-                function submitColumnFilter(columnIndex) {
-                    const operatorSelect = document.getElementById('filter-operator-' + columnIndex);
-                    const valueInput = document.getElementById('filter-value-' + columnIndex);
-                    const valueInput2 = document.getElementById('filter-value2-' + columnIndex);
-                    
-                    if (!operatorSelect || !valueInput) return;
-                    
-                    const operator = operatorSelect.value;
-                    const value = valueInput.value;
-                    const value2 = valueInput2 ? valueInput2.value : '';
-                    
-                    if (value && value.trim() !== '') {
-                        // Store filter as object with operator and value(s)
-                        columnFilters[columnIndex] = {
-                            operator: operator,
-                            value: value,
-                            value2: value2
-                        };
-                        const th = document.getElementById('filter-' + columnIndex).parentElement;
-                        th.classList.add('filter-active');
-                    } else {
-                        delete columnFilters[columnIndex];
-                        const th = document.getElementById('filter-' + columnIndex).parentElement;
-                        th.classList.remove('filter-active');
-                    }
-                    
-                    const globalSearch = document.getElementById('searchInput').value.toLowerCase();
-                    applyFilters(globalSearch);
-                }
-
-                function applyColumnFilter(columnIndex, filterValue) {
-                    if (filterValue && filterValue.trim() !== '') {
-                        columnFilters[columnIndex] = filterValue;
-                        const th = document.getElementById('filter-' + columnIndex).parentElement;
-                        th.classList.add('filter-active');
-                    } else {
-                        delete columnFilters[columnIndex];
-                        const th = document.getElementById('filter-' + columnIndex).parentElement;
-                        th.classList.remove('filter-active');
-                    }
-
-                    const globalSearch = document.getElementById('searchInput').value.toLowerCase();
-                    applyFilters(globalSearch);
-                }
-
-                function sortTable(columnIndex, event) {
-                    const isShiftPressed = event && event.shiftKey;
-                    
-                    if (isShiftPressed) {
-                        // Multi-column sorting with Shift
-                        const existingSortIndex = sortColumns.findIndex(s => s.columnIndex === columnIndex);
-                        
-                        if (existingSortIndex !== -1) {
-                            const currentDirection = sortColumns[existingSortIndex].direction;
-                            if (currentDirection === 1) {
-                                // asc -> desc
-                                sortColumns[existingSortIndex].direction = -1;
-                            } else {
-                                // desc -> remove
-                                sortColumns.splice(existingSortIndex, 1);
-                            }
-                        } else {
-                            // Add new column to sort
-                            sortColumns.push({ columnIndex, direction: 1 });
-                        }
-                    } else {
-                        // Single column sorting (normal click)
-                        if (sortColumns.length === 1 && sortColumns[0].columnIndex === columnIndex) {
-                            const currentDirection = sortColumns[0].direction;
-                            if (currentDirection === 1) {
-                                // asc -> desc
-                                sortColumns[0].direction = -1;
-                            } else {
-                                // desc -> unsort
-                                sortColumns = [];
-                            }
-                        } else {
-                            // New single column sort
-                            sortColumns = [{ columnIndex, direction: 1 }];
-                        }
-                    }
-                    
-                    applySorting();
-                    updateSortIndicators();
-                    renderTable();
-                }
-                
-                function applySorting() {
-                    if (sortColumns.length === 0) return;
-                    
-                    filteredData.sort((a, b) => {
-                        for (const sort of sortColumns) {
-                            const { columnIndex, direction } = sort;
-                            const colName = columns[columnIndex];
-                            const aVal = a[colName];
-                            const bVal = b[colName];
-                            
-                            let comparison = 0;
-                            if (aVal === null || aVal === undefined) {
-                                comparison = (bVal === null || bVal === undefined) ? 0 : -1;
-                            } else if (bVal === null || bVal === undefined) {
-                                comparison = 1;
-                            } else {
-                                comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-                            }
-                            
-                            if (comparison !== 0) {
-                                return comparison * direction;
-                            }
-                        }
-                        return 0;
-                    });
-                }
-                
-                function updateSortIndicators() {
-                    // Clear all sort indicators
-                    document.querySelectorAll('th').forEach((th, index) => {
-                        th.classList.remove('sort-asc', 'sort-desc');
-                        const existingIndicator = th.querySelector('.sort-indicator');
-                        if (existingIndicator) {
-                            existingIndicator.remove();
-                        }
-                    });
-                    
-                    // Add sort indicators for sorted columns
-                    sortColumns.forEach((sort, index) => {
-                        const { columnIndex, direction } = sort;
-                        const th = document.querySelectorAll('th')[columnIndex];
-                        if (th) {
-                            th.classList.add(direction === 1 ? 'sort-asc' : 'sort-desc');
-                            
-                            // Add sort indicator icon
-                            const indicator = document.createElement('span');
-                            indicator.className = 'sort-indicator';
-                            
-                            // Create SVG icon
-                            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                            svg.setAttribute('width', '16');
-                            svg.setAttribute('height', '16');
-                            svg.setAttribute('viewBox', '0 0 24 24');
-                            svg.setAttribute('fill', 'none');
-                            svg.setAttribute('stroke', 'currentColor');
-                            svg.setAttribute('stroke-width', '2');
-                            svg.setAttribute('stroke-linecap', 'round');
-                            svg.setAttribute('stroke-linejoin', 'round');
-                            
-                            if (direction === 1) {
-                                // Arrow up for ascending
-                                const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                                path1.setAttribute('d', 'm5 12 7-7 7 7');
-                                const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                                path2.setAttribute('d', 'M12 19V5');
-                                svg.appendChild(path1);
-                                svg.appendChild(path2);
-                            } else {
-                                // Arrow down for descending
-                                const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                                path1.setAttribute('d', 'M12 5v14');
-                                const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                                path2.setAttribute('d', 'm19 12-7 7-7-7');
-                                svg.appendChild(path1);
-                                svg.appendChild(path2);
-                            }
-                            
-                            indicator.appendChild(svg);
-                            
-                            if (index > 0) {
-                                const priority = document.createElement('span');
-                                priority.className = 'sort-priority';
-                                priority.textContent = index + 1;
-                                priority.title = 'Sort priority ' + (index + 1);
-                                indicator.appendChild(priority);
-                            }
-                            
-                            th.querySelector('span').appendChild(indicator);
-                        }
-                    });
-                }
-
-                function renderTable() {
-                    const tbody = document.getElementById('tableBody');
-                    const tableContainer = document.querySelector('.table-container');
-                    const pageData = filteredData;
-
-                    // DO NOT rebuild headers - they contain stateful filter UI
-                    // Headers are built once in the HTML template and should never be destroyed
-
-                    // Handle empty state
-                    if (pageData.length === 0) {
-                        if (tbody) {
-                            tbody.innerHTML = '';
-                        }
-                        
-                        // Keep the table header with filters visible, just empty the tbody
-                        // Don't replace the entire table, just show empty state in tbody
-                        const emptyStateHtml = \`
-                            <tr>
-                                <td colspan="\${allColumns.length}" style="text-align: center; padding: 60px 20px; vertical-align: middle;">
-                                    <div class="empty-state" style="display: block; min-height: auto; padding: 40px;">
-                                        <div class="empty-state-icon">📭</div>
-                                        <div class="empty-state-title">No records found</div>
-                                        <div class="empty-state-message">
-                                            \${data.length === 0 ? 
-                                                'No data available in this table.' : 
-                                                'No records match your current filters. Try adjusting your search criteria or clear all filters.'
-                                            }
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>
-                        \`;
-                        
-                        if (tbody) {
-                            tbody.innerHTML = emptyStateHtml;
-                        }
-                        
-                        updateSortIndicators();
-                        updatePagination();
-                        return;
-                    }
-
-                    // Render table body respecting column visibility
-                    if (tbody) {
-                        tbody.innerHTML = pageData.map(row => {
-                            return \`<tr>\${allColumns.map(col => {
-                                const value = row[col];
-                                let cellClass = '';
-                                let formattedValue = '';
-
-                                if (value === null || value === undefined) {
-                                    cellClass = 'null';
-                                    formattedValue = '<i>NULL</i>';
-                                } else if (typeof value === 'object') {
-                                    cellClass = 'object';
-                                    formattedValue = JSON.stringify(value);
-                                } else {
-                                    cellClass = typeof value;
-                                    formattedValue = String(value);
-                                }
-
-                                const displayStyle = visibleColumns.includes(col) ? '' : 'display: none;';
-                                return \`<td class="\${cellClass}" style="\${displayStyle}">\${formattedValue}</td>\`;
-                            }).join('')}</tr>\`;
-                        }).join('');
-                    }
-
-                    // Show records found message if filtered
-                    if (filteredData.length < data.length) {
-                        const statsDiv = document.getElementById('stats');
-                        if (statsDiv && !statsDiv.querySelector('.records-found')) {
-                            const recordsFoundMsg = document.createElement('div');
-                            recordsFoundMsg.className = 'records-found';
-                            recordsFoundMsg.textContent = \`\${filteredData.length} of \${data.length} records found\`;
-                            statsDiv.insertBefore(recordsFoundMsg, statsDiv.firstChild);
-                        } else if (statsDiv) {
-                            const existingMsg = statsDiv.querySelector('.records-found');
-                            if (existingMsg) {
-                                existingMsg.textContent = \`\${filteredData.length} of \${data.length} records found\`;
-                            }
-                        }
-                    } else {
-                        // Remove records found message if not filtered
-                        const statsDiv = document.getElementById('stats');
-                        if (statsDiv) {
-                            const existingMsg = statsDiv.querySelector('.records-found');
-                            if (existingMsg) {
-                                existingMsg.remove();
-                            }
-                        }
-                    }
-
-                    updateSortIndicators();
-                    updatePagination();
-                }
-
-                function updatePagination() {
-                    const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage));
-                    if (currentPage > totalPages) {
-                        currentPage = totalPages;
-                    }
-                    document.getElementById('pageInfo').textContent = \`Page \${currentPage} of \${totalPages}\`;
-                    document.getElementById('prevBtn').disabled = currentPage === 1;
-                    document.getElementById('nextBtn').disabled = currentPage === totalPages;
-                    document.getElementById('recordCount').textContent = \`Showing \${filteredData.length} of \${totalRows} rows\`;
-                    const stats = document.getElementById('stats');
-                    if (stats) {
-                        stats.textContent = \`Showing \${filteredData.length} of \${totalRows} rows\`;
-                    }
-                }
-
-                function changeRowsPerPage(value) {
-                    const nextSize = parseInt(value, 10);
-                    if (!Number.isFinite(nextSize) || nextSize <= 0) {
-                        return;
-                    }
-                    rowsPerPage = nextSize;
-                    currentPage = 1;
-                    requestPage(currentPage, rowsPerPage);
-                }
-
-                function toggleQueryConsole() {
-                    // This would open query console in a new panel
-                    console.log('Query console toggle requested');
-                }
-
-                function clearAllFilters() {
-                    columnFilters = {};
-                    sortColumns = [];
-                    document.getElementById('searchInput').value = '';
-                    
-                    // Clear all filter UI elements
-                    columns.forEach((_, idx) => {
-                        const operatorSelect = document.getElementById('filter-operator-' + idx);
-                        const valueInput = document.getElementById('filter-value-' + idx);
-                        const valueInput2 = document.getElementById('filter-value2-' + idx);
-
-                        if (operatorSelect) operatorSelect.value = 'contains';
-                        if (valueInput) valueInput.value = '';
-                        if (valueInput2) valueInput2.value = '';
-
-                        const filterElement = document.getElementById('filter-' + idx);
-                        if (filterElement && filterElement.parentElement) {
-                            filterElement.parentElement.classList.remove('filter-active');
-                        }
-                    });
-                    
-                    // Remove records found message
-                    const statsDiv = document.getElementById('stats');
-                    if (statsDiv) {
-                        const existingMsg = statsDiv.querySelector('.records-found');
-                        if (existingMsg) {
-                            existingMsg.remove();
-                        }
-                    }
-                    
-                    applySorting();
-                    updateSortIndicators();
-                    renderTable();
-                }
-
-                // Column Manager Functions
-                function openColumnManager(event) {
-                    event.stopPropagation();
-                    const mgr = document.getElementById('column-manager');
-                    const trigger = event.currentTarget;
-                    const rect = trigger.getBoundingClientRect();
-                    
-                    renderColumnList();
-                    mgr.classList.remove('hidden');
-                    
-                    let left = rect.left;
-                    if (left + 240 > window.innerWidth) left = window.innerWidth - 250;
-                    mgr.style.left = left + 'px';
-                    mgr.style.top = (rect.bottom + 8) + 'px';
-                }
-
-                function closeColumnManager() { 
-                    document.getElementById('column-manager').classList.add('hidden'); 
-                }
-
-                function renderColumnList() {
-                    const container = document.getElementById('column-list-content');
-                    // TODO: Column reordering is disabled because the filter/sort system uses
-                    // hardcoded column indices. To re-enable, refactor all filter/sort code
-                    // to use column names instead of indices.
-                    container.innerHTML = allColumns.map((col, idx) => \`
-                        <div class="column-item">
-                            <input type="checkbox" \${visibleColumns.includes(col) ? 'checked' : ''} onchange="toggleColVisibility('\${col}')">
-                            <span>\${col}</span>
-                        </div>
                     \`).join('');
                 }
 
-                function toggleColVisibility(col) {
-                    const colIndex = allColumns.indexOf(col);
+                // --- 5. Filtering & Sorting (Client Side) ---
+                function handleSort(event, col) {
+                    const isShift = event.shiftKey;
+                    const existingIndex = sortConfig.findIndex(s => s.col === col);
 
-                    if (visibleColumns.includes(col)) {
-                        if (visibleColumns.length > 1) {
-                            visibleColumns = visibleColumns.filter(c => c !== col);
-                            // Hide header
-                            const th = document.querySelectorAll('#dataTable thead th')[colIndex];
-                            if (th) th.style.display = 'none';
-                            // Hide all cells in this column
-                            document.querySelectorAll('#dataTable tbody tr').forEach(tr => {
-                                if (tr.children[colIndex]) {
-                                    tr.children[colIndex].style.display = 'none';
-                                }
-                            });
+                    if (isShift) {
+                        if (existingIndex !== -1) {
+                            if (sortConfig[existingIndex].dir === 'asc') sortConfig[existingIndex].dir = 'desc';
+                            else sortConfig.splice(existingIndex, 1);
+                        } else {
+                            sortConfig.push({ col: col, dir: 'asc' });
                         }
                     } else {
-                        visibleColumns.push(col);
-                        // Show header
-                        const th = document.querySelectorAll('#dataTable thead th')[colIndex];
-                        if (th) th.style.display = '';
-                        // Show all cells in this column
-                        document.querySelectorAll('#dataTable tbody tr').forEach(tr => {
-                            if (tr.children[colIndex]) {
-                                tr.children[colIndex].style.display = '';
+                        if (existingIndex !== -1 && sortConfig.length === 1) {
+                            // Cycle through: asc -> desc -> remove
+                            if (sortConfig[0].dir === 'asc') {
+                                sortConfig[0].dir = 'desc';
+                            } else {
+                                sortConfig = []; // Remove sort on third click
                             }
+                        } else {
+                            sortConfig = [{ col: col, dir: 'asc' }];
+                        }
+                    }
+                    processData();
+                }
+
+                function processData() {
+                    // 1. Filter
+                    let temp = allData.filter(row => {
+                        // Global search
+                        if (state.globalSearch) {
+                            const term = state.globalSearch.toLowerCase();
+                            const matches = Object.values(row).some(val => String(val).toLowerCase().includes(term));
+                            if (!matches) return false;
+                        }
+
+                        // Column filters
+                        for (const [col, filter] of Object.entries(state.columnFilters)) {
+                            let val = row[col];
+                            const fVal = filter.value;
+                            const fVal2 = filter.value2;
+                            const op = filter.op;
+
+                            if (val === null || val === undefined) return false;
+
+                            // Number logic
+                            if (typeof val === 'number') {
+                                const nVal = Number(val);
+                                const nFVal = Number(fVal);
+                                const nFVal2 = Number(fVal2);
+                                if (op === '=') { if (nVal !== nFVal) return false; }
+                                else if (op === '!=') { if (nVal === nFVal) return false; }
+                                else if (op === '>') { if (nVal <= nFVal) return false; }
+                                else if (op === '<') { if (nVal >= nFVal) return false; }
+                                else if (op === '>=') { if (nVal < nFVal) return false; }
+                                else if (op === '<=') { if (nVal > nFVal) return false; }
+                                else if (op === 'range') { if (nVal < nFVal || nVal > nFVal2) return false; }
+                            }
+                            // Date logic (String based)
+                            else if (!isNaN(Date.parse(val)) && typeof val === 'string' && val.includes('-')) {
+                                if (op === '=') { if (val !== fVal) return false; }
+                                else if (op === '!=') { if (val === fVal) return false; }
+                                else if (op === '>') { if (val <= fVal) return false; }
+                                else if (op === '<') { if (val >= fVal) return false; }
+                                else if (op === '>=') { if (val < fVal) return false; }
+                                else if (op === '<=') { if (val > fVal) return false; }
+                                else if (op === 'range') { if (val < fVal || val > fVal2) return false; }
+                            }
+                            // String/Bool Logic
+                            else {
+                                const sVal = String(val).toLowerCase();
+                                const sFVal = String(fVal).toLowerCase();
+
+                                if (op === 'contains') { if (!sVal.includes(sFVal)) return false; }
+                                else if (op === 'not_contains') { if (sVal.includes(sFVal)) return false; }
+                                else if (op === '=') { if (sVal !== sFVal) return false; }
+                                else if (op === '!=') { if (sVal === sFVal) return false; }
+                                else if (op === 'starts_with') { if (!sVal.startsWith(sFVal)) return false; }
+                                else if (op === 'ends_with') { if (!sVal.endsWith(sFVal)) return false; }
+                                else if (op === 'regex') {
+                                    try {
+                                        const regex = new RegExp(filter.value, 'i');
+                                        if (!regex.test(String(val))) return false;
+                                    } catch (e) { return true; } // Ignore invalid regex
+                                }
+                            }
+                        }
+                        return true;
+                    });
+
+                    // 2. Sort
+                    if (sortConfig.length > 0) {
+                        temp.sort((a, b) => {
+                            for (const sort of sortConfig) {
+                                const valA = a[sort.col];
+                                const valB = b[sort.col];
+                                if (valA < valB) return sort.dir === 'asc' ? -1 : 1;
+                                if (valA > valB) return sort.dir === 'asc' ? 1 : -1;
+                            }
+                            return 0;
                         });
                     }
-                    renderColumnList();
+
+                    filteredData = temp;
+                    state.currentPage = 1;
+                    updateUI();
                 }
 
-                // Column reordering disabled - see renderColumnList() comment
-                // function moveColIdx(idx, direction) {
-                //     const target = idx + direction;
-                //     if (target < 0 || target >= allColumns.length) return;
-                //     const temp = allColumns[idx];
-                //     allColumns[idx] = allColumns[target];
-                //     allColumns[target] = temp;
-                //     renderTable();
-                //     renderColumnList();
-                // }
+                // --- 6. UI Helpers ---
+                let currentFilterCol = null;
 
-                function resetColumnOrder() {
-                    visibleColumns = [...columns];
-                    // Show all headers
-                    document.querySelectorAll('#dataTable thead th').forEach(th => {
-                        th.style.display = '';
-                    });
-                    renderTable(); // Safe now - only updates tbody
-                    renderColumnList();
-                }
-
-                // Drag and drop for columns - DISABLED
-                // let draggedIdx = null;
-                // function dragCol(e, idx) { draggedIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
-                // function allowDrop(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
-                // function dropCol(e, idx) {
-                //     e.preventDefault();
-                //     const moving = allColumns.splice(draggedIdx, 1)[0];
-                //     allColumns.splice(idx, 0, moving);
-                //     renderTable();
-                //     renderColumnList();
-                // }
-
-                // Advanced Filter Functions
-                let activeFilterCol = null;
-                
-                function openFilterPopup(event, col) {
+                function openFilter(event, col) {
                     event.stopPropagation();
-                    const popup = document.getElementById('advanced-filter-popup');
-                    const trigger = event.currentTarget;
-                    const rect = trigger.getBoundingClientRect();
+                    currentFilterCol = col;
+                    const btn = event.currentTarget;
+                    const rect = btn.getBoundingClientRect();
+                    const popover = document.getElementById('filterPopover');
                     
-                    activeFilterCol = col;
-                    document.getElementById('filter-title').innerText = 'Filter: ' + col;
-                    renderFilterControls(getColumnType(col), columnFilters[col] || {}, document.getElementById('filter-controls'));
+                    let left = rect.left;
+                    if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
+                    popover.style.top = (rect.bottom + 5) + 'px';
+                    popover.style.left = left + 'px';
 
-                    popup.classList.remove('hidden');
-                    let left = rect.left - 240;
-                    if (left < 10) left = 10;
-                    let top = rect.bottom + 10;
-                    if (top + 400 > window.innerHeight) top = rect.top - 400;
-                    popup.style.left = left + 'px';
-                    popup.style.top = top + 'px';
+                    renderFilterUI(col);
+                    popover.classList.remove('hidden');
+
+                    const input = document.getElementById('filterVal');
+                    if (input) setTimeout(() => input.focus(), 50);
                 }
 
-                function closeFilterPopup() { 
-                    document.getElementById('advanced-filter-popup').classList.add('hidden'); 
-                }
+                function renderFilterUI(col) {
+                    const sampleVal = allData.length > 0 ? allData[0][col] : null;
+                    const type = typeof sampleVal;
+                    const container = document.getElementById('filterContent');
+                    const current = state.columnFilters[col] || { op: '', value: '', value2: '' };
+                    const isEnum = columnStats[col] && columnStats[col].isEnum;
 
-                function renderFilterControls(type, current, container) {
+                    document.getElementById('filterTitle').textContent = \`Filter \${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}\`;
+
                     let html = '';
-                    if (type === 'string') {
-                        html = \`<div>
-                            <label class="filter-label">Contains</label>
-                            <input type="text" class="filter-input" value="\${current.value || ''}" placeholder="Enter keyword...">
-                        </div>\`;
-                    } else if (type === 'number') {
-                        html = \`<div>
-                            <label class="filter-label">Operator</label>
-                            <select class="filter-select" onchange="document.getElementById('filter-value2-box').classList.toggle('hidden', this.value !== 'range')">
-                                <option value="=" \${current.op === '=' ? 'selected' : ''}>=</option>
-                                <option value=">" \${current.op === '>' ? 'selected' : ''}>></option>
-                                <option value="<" \${current.op === '<' ? 'selected' : ''}><</option>
-                                <option value="range" \${current.op === 'range' ? 'selected' : ''}>Range</option>
+                    let datalist = '';
+
+                    // Autocomplete Datalist
+                    const uniqueVals = Array.from(new Set(allData.map(d => d[col]))).slice(0, 50);
+                    datalist = \`<datalist id="autoComplete_\${col}">\${uniqueVals.map(v => \`<option value="\${v}">\`).join('')}</datalist>\`;
+
+                    if (type === 'number') {
+                        html = \`
+                            <select id="filterOp" class="w-full mb-2 border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 focus:ring-gray-500 focus:border-gray-500" onchange="toggleRangeInput(this.value)">
+                                <option value="=" \${current.op === '=' ? 'selected' : ''}>Equals (=)</option>
+                                <option value="!=" \${current.op === '!=' ? 'selected' : ''}>Not Equals (!=)</option>
+                                <option value=">" \${current.op === '>' ? 'selected' : ''}>Greater Than (>)</option>
+                                <option value="<" \${current.op === '<' ? 'selected' : ''}>Less Than (<)</option>
+                                <option value=">=" \${current.op === '>=' ? 'selected' : ''}>Greater or Equal (>=)</option>
+                                <option value="<=" \${current.op === '<=' ? 'selected' : ''}>Less or Equal (<=)</option>
+                                <option value="range" \${current.op === 'range' ? 'selected' : ''}>Range (Between)</option>
                             </select>
-                            <input type="number" class="filter-input" value="\${current.value || ''}" placeholder="Value">
-                            <div id="filter-value2-box" class="\${current.op === 'range' ? '' : 'hidden'}">
-                                <input type="number" class="filter-input" value="\${current.value2 || ''}" placeholder="Max">
-                            </div>
-                        </div>\`;
-                    } else if (type === 'date') {
-                        html = \`<div>
-                            <label class="filter-label">Condition</label>
-                            <select class="filter-select" onchange="document.getElementById('filter-date2-box').classList.toggle('hidden', this.value !== 'range')">
-                                <option value="=" \${current.op === "=" ? 'selected' : ''}>=</option>
-                                <option value=">" \${current.op === '>' ? 'selected' : ''}>After</option>
-                                <option value="<" \${current.op === '<' ? 'selected' : ''}>Before</option>
-                                <option value="range" \${current.op === 'range' ? 'selected' : ''}>Between</option>
-                            </select>
-                            <input type="date" class="filter-input" value="\${current.value || ''}">
-                            <div id="filter-date2-box" class="\${current.op === 'range' ? '' : 'hidden'}">
-                                <input type="date" class="filter-input" value="\${current.value2 || ''}">
-                            </div>
-                        </div>\`;
+                            <input type="number" id="filterVal" value="\${current.value}" class="w-full border rounded p-2 text-sm mb-2 bg-gray-700 border-gray-600 text-gray-100" placeholder="Value...">
+                            <input type="number" id="filterVal2" value="\${current.value2}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 \${current.op === 'range' ? '' : 'hidden'}" placeholder="To Value...">
+                        \`;
                     } else if (type === 'boolean') {
-                        html = \`<select class="filter-select">
-                            <option value="true" \${current.value === 'true' ? 'selected' : ''}>TRUE</option>
-                            <option value="false" \${current.value === 'false' ? 'selected' : ''}>FALSE</option>
-                        </select>\`;
+                        html = \`
+                            <select id="filterOp" class="hidden"><option value="=">Equals</option></select>
+                            <select id="filterVal" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100">
+                                <option value="true" \${String(current.value) === 'true' ? 'selected' : ''}>TRUE</option>
+                                <option value="false" \${String(current.value) === 'false' ? 'selected' : ''}>FALSE</option>
+                            </select>
+                        \`;
+                    } else {
+                        // String / Date logic
+                        const isDate = !isNaN(Date.parse(sampleVal)) && String(sampleVal).includes('-');
+
+                        if (isDate) {
+                            html = \`
+                                <select id="filterOp" class="w-full mb-2 border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100" onchange="toggleRangeInput(this.value)">
+                                    <option value="=" \${current.op === '=' ? 'selected' : ''}>Equals Date</option>
+                                    <option value="!=" \${current.op === '!=' ? 'selected' : ''}>Not Date</option>
+                                    <option value=">" \${current.op === '>' ? 'selected' : ''}>After</option>
+                                    <option value="<" \${current.op === '<' ? 'selected' : ''}>Before</option>
+                                    <option value=">=" \${current.op === '>=' ? 'selected' : ''}>On or After</option>
+                                    <option value="<=" \${current.op === '<=' ? 'selected' : ''}>On or Before</option>
+                                    <option value="range" \${current.op === 'range' ? 'selected' : ''}>Between Dates</option>
+                                </select>
+                                <input type="date" id="filterVal" value="\${current.value}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 mb-2">
+                                <input type="date" id="filterVal2" value="\${current.value2}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 \${current.op === 'range' ? '' : 'hidden'}">
+                            \`;
+                        } else {
+                            html = \`
+                                <select id="filterOp" class="w-full mb-2 border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100">
+                                    <option value="contains" \${current.op === 'contains' ? 'selected' : ''}>Contains</option>
+                                    <option value="not_contains" \${current.op === 'not_contains' ? 'selected' : ''}>Does Not Contain</option>
+                                    <option value="=" \${current.op === '=' ? 'selected' : ''}>Equals</option>
+                                    <option value="!=" \${current.op === '!=' ? 'selected' : ''}>Not Equals</option>
+                                    <option value="starts_with" \${current.op === 'starts_with' ? 'selected' : ''}>Starts With</option>
+                                    <option value="ends_with" \${current.op === 'ends_with' ? 'selected' : ''}>Ends With</option>
+                                    <option value="regex" \${current.op === 'regex' ? 'selected' : ''}>Regex Match</option>
+                                </select>
+                                \${datalist}
+                                <input type="text" id="filterVal" list="autoComplete_\${col}" value="\${current.value}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100" placeholder="Value..." autofocus>
+                                <div class="text-xs text-gray-400 mt-1 italic \${current.op === 'regex' ? '' : 'hidden'}" id="regexHint">Example: ^[A-Z].*</div>
+                            \`;
+                        }
                     }
                     container.innerHTML = html;
                 }
 
-                function applyFilter() {
-                    const inputs = document.querySelectorAll('#filter-controls input');
-                    const selects = document.querySelectorAll('#filter-controls select');
-                    
-                    let filterValue = null;
-                    let filterValue2 = null;
-                    let filterOp = null;
-                    
-                    inputs.forEach(input => {
-                        if (input.value) {
-                            if (!filterValue) filterValue = input.value;
-                            else filterValue2 = input.value;
-                        }
-                    });
-                    
-                    selects.forEach(select => {
-                        if (select.value) filterOp = select.value;
-                    });
-                    
-                    if (filterValue === '' && getColumnType(activeFilterCol) !== 'boolean') {
-                        delete columnFilters[activeFilterCol];
+                function toggleRangeInput(op) {
+                    const v2 = document.getElementById('filterVal2');
+                    if (v2) {
+                        if (op === 'range') v2.classList.remove('hidden');
+                        else v2.classList.add('hidden');
+                    }
+                    const hint = document.getElementById('regexHint');
+                    if (hint) {
+                        const opSelect = document.getElementById('filterOp');
+                        if (opSelect && opSelect.value === 'regex') hint.classList.remove('hidden');
+                        else hint.classList.add('hidden');
+                    }
+                }
+
+                function applyCurrentFilter() {
+                    const op = document.getElementById('filterOp').value;
+                    const val = document.getElementById('filterVal').value;
+                    const val2Element = document.getElementById('filterVal2');
+                    const val2 = val2Element ? val2Element.value : '';
+
+                    if (val === '') {
+                        delete state.columnFilters[currentFilterCol];
                     } else {
-                        columnFilters[activeFilterCol] = { 
-                            type: getColumnType(activeFilterCol), 
-                            value: filterValue, 
-                            value2: filterValue2, 
-                            op: filterOp || '=' 
-                        };
+                        state.columnFilters[currentFilterCol] = { op, value: val, value2: val2 };
                     }
+                    closeFilterPopover();
+                    processData();
+                }
+
+                function clearCurrentFilter() {
+                    delete state.columnFilters[currentFilterCol];
+                    closeFilterPopover();
+                    processData();
+                }
+                
+                function closeFilterPopover() { document.getElementById('filterPopover').classList.add('hidden'); }
+                function clearAllFilters() { state.columnFilters = {}; document.getElementById('globalSearch').value = ''; state.globalSearch = ''; processData(); }
+
+                // Drag & Drop Cols
+                function handleDragStart(e, col) { draggedColumn = col; e.target.classList.add('dragging'); }
+                function handleDragOver(e, col) {
+                    e.preventDefault();
+                    if (draggedColumn === col) return;
+                    const th = e.currentTarget;
+                    const rect = th.getBoundingClientRect();
+                    th.classList.remove('drag-over-left', 'drag-over-right');
+                    if (e.clientX < rect.left + rect.width / 2) th.classList.add('drag-over-left'); else th.classList.add('drag-over-right');
+                }
+                function handleDragLeave(e) { e.currentTarget.classList.remove('drag-over-left', 'drag-over-right'); }
+                function handleDrop(e, targetCol) {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove('drag-over-left', 'drag-over-right');
+                    document.querySelectorAll('th').forEach(th => th.classList.remove('dragging'));
+                    if (draggedColumn && draggedColumn !== targetCol) {
+                        const oldIdx = visibleColumns.indexOf(draggedColumn);
+                        visibleColumns.splice(oldIdx, 1);
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const newIdx = (e.clientX < rect.left + rect.width / 2) ? visibleColumns.indexOf(targetCol) : visibleColumns.indexOf(targetCol) + 1;
+                        visibleColumns.splice(newIdx, 0, draggedColumn);
+                        initTable();
+                    }
+                }
+
+                // Standard UI Utils
+                function updateUI() { renderHeader(); renderBody(); renderPagination(); updateTotalCount(); 
+                     const badge = document.getElementById('filterBadge');
+                     Object.keys(state.columnFilters).length > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden');
+                }
+                function updateTotalCount() { document.getElementById('totalRecords').textContent = \`\${filteredData.length} Records\`; }
+                function renderPagination() {
+                    const totalPages = Math.ceil(filteredData.length / state.rowsPerPage) || 1;
+                    document.getElementById('pageInfo').textContent = \`Page \${state.currentPage} of \${totalPages}\`;
+                    document.getElementById('btnPrev').disabled = state.currentPage === 1;
+                    document.getElementById('btnNext').disabled = state.currentPage === totalPages;
+                }
+                function nextPage() { if (state.currentPage < Math.ceil(filteredData.length / state.rowsPerPage)) { state.currentPage++; updateUI(); } }
+                function prevPage() { if (state.currentPage > 1) { state.currentPage--; updateUI(); } }
+                function changeRowsPerPage(val) { state.rowsPerPage = parseInt(val); state.currentPage = 1; updateUI(); }
+                
+                function toggleQueryPanel() { document.getElementById('queryPanel').classList.toggle('hidden'); }
+                function toggleColumnManager() { 
+                    const el = document.getElementById('columnManager');
+                    el.classList.toggle('hidden');
+                    if(!el.classList.contains('hidden')) {
+                         document.getElementById('columnList').innerHTML = columns.map(col => \`
+                            <label class="flex items-center space-x-2 p-1.5 hover:bg-gray-700 rounded cursor-pointer">
+                                <input type="checkbox" onchange="toggleColumn('\${col}')" \${visibleColumns.includes(col) ? 'checked' : ''} class="rounded text-slate-600 bg-gray-700 border-gray-600">
+                                <span class="text-gray-300">\${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
+                            </label>
+                        \`).join('');
+                    }
+                }
+                function resetView() { visibleColumns = [...columns]; clearAllFilters(); sortConfig = []; initTable(); }
+                function exportData() {
+                    if(filteredData.length === 0) { alert("No data to export"); return; }
+                    const header = visibleColumns.join(",");
+                    const rows = filteredData.map(row => visibleColumns.map(col => \`"\${String(row[col]||'').replace(/"/g, '""')}"\`).join(",")).join("\\n");
+                    const blob = new Blob([header + "\\n" + rows], { type: "text/csv" });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.setAttribute("href", url);
+                    a.setAttribute("download", "export.csv");
+                    a.click();
+                }
+
+                // Global Search
+                document.getElementById('globalSearch').addEventListener('input', (e) => { state.globalSearch = e.target.value; processData(); });
+
+                // Query Panel Functions
+                function setQueryMode(mode) {
+                    const sqlBtn = document.getElementById('modeSql');
+                    const aiBtn = document.getElementById('modeAi');
+                    const input = document.getElementById('queryInput');
+
+                    if (mode === 'sql') {
+                        sqlBtn.classList.add('bg-white', 'text-gray-900', 'shadow-sm');
+                        sqlBtn.classList.remove('text-gray-500');
+                        aiBtn.classList.remove('bg-white', 'text-gray-900', 'shadow-sm');
+                        aiBtn.classList.add('text-gray-500');
+                        input.placeholder = "SELECT * FROM...";
+                        document.getElementById('sampleQueriesContainer').classList.remove('hidden');
+                    } else {
+                        aiBtn.classList.add('bg-white', 'text-gray-900', 'shadow-sm');
+                        aiBtn.classList.remove('text-gray-500');
+                        sqlBtn.classList.remove('bg-white', 'text-gray-900', 'shadow-sm');
+                        sqlBtn.classList.add('text-gray-500');
+                        input.placeholder = "Ask in plain English (e.g. 'Show me all active records')...";
+                        document.getElementById('sampleQueriesContainer').classList.add('hidden');
+                    }
+                }
+
+                function loadSampleQuery(val) {
+                    if (val) {
+                        document.getElementById('queryInput').value = val;
+                    }
+                }
+
+                function clearQuery() {
+                    document.getElementById('queryInput').value = '';
+                    document.getElementById('queryStatus').classList.add('hidden');
+                }
+
+                function executeCustomQuery() {
+                    const sql = document.getElementById('queryInput').value;
+                    if(!sql.trim()) return;
                     
-                    applyFiltering();
-                    renderTable();
-                    closeFilterPopup();
+                    const status = document.getElementById('queryStatus');
+                    status.innerHTML = \`<span class="inline-flex items-center gap-1 text-gray-500"><span class="material-symbols-outlined text-sm animate-spin">refresh</span> Executing...</span>\`;
+                    status.classList.remove('hidden');
+
+                    vscode.postMessage({
+                        command: 'executeQuery',
+                        query: sql
+                    });
                 }
 
-                function clearCurrentFilter() { 
-                    delete columnFilters[activeFilterCol]; 
-                    applyFiltering();
-                    renderTable(); 
-                    closeFilterPopup(); 
-                }
-
-                function previousPage() {
-                    if (currentPage > 1) {
-                        requestPage(currentPage - 1, rowsPerPage);
+                // Close popovers on click outside
+                document.addEventListener('click', (e) => {
+                    if (!document.getElementById('filterPopover').classList.contains('hidden') && !e.target.closest('#filterPopover') && !e.target.closest('th button')) {
+                        document.getElementById('filterPopover').classList.add('hidden');
                     }
-                }
-
-                function nextPage() {
-                    const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage));
-                    if (currentPage < totalPages) {
-                        requestPage(currentPage + 1, rowsPerPage);
+                    if (!document.getElementById('columnManager').classList.contains('hidden') && !e.target.closest('#columnManager') && !e.target.closest('button[onclick*="toggleColumnManager"]')) {
+                        document.getElementById('columnManager').classList.add('hidden');
                     }
-                }
+                });
 
-                function prevPage() {
-                    previousPage();
-                }
-
+                // Message handling from extension
                 window.addEventListener('message', event => {
                     const message = event.data;
                     if (message.command === 'pageData') {
-                        data = Array.isArray(message.data) ? message.data : [];
+                        allData = Array.isArray(message.data) ? message.data : [];
+                        filteredData = [...allData];
                         if (typeof message.totalRows === 'number') {
                             totalRows = message.totalRows;
                         }
                         const nextPage = Number(message.page);
                         if (Number.isFinite(nextPage) && nextPage > 0) {
-                            currentPage = Math.floor(nextPage);
+                            state.currentPage = Math.floor(nextPage);
                         }
                         const nextPageSize = Number(message.pageSize);
                         if (Number.isFinite(nextPageSize) && nextPageSize > 0) {
-                            rowsPerPage = Math.floor(nextPageSize);
-                            if (rowsPerPageSelect) {
-                                rowsPerPageSelect.value = String(rowsPerPage);
-                            }
+                            state.rowsPerPage = Math.floor(nextPageSize);
                         }
-                        const globalSearchInput = document.getElementById('searchInput');
-                        const globalSearch = globalSearchInput ? globalSearchInput.value.toLowerCase() : '';
-                        applyFilters(globalSearch);
+                        analyzeColumns();
+                        processData();
                     } else if (message.command === 'pageError') {
                         console.error(message.error || 'Failed to load page');
                     } else if (message.command === 'queryResult') {
-                        displayQueryResults(message.data, message.rowCount);
+                        const status = document.getElementById('queryStatus');
+                        status.innerHTML = \`<span class="inline-flex items-center gap-1 text-green-600"><span class="material-symbols-outlined text-sm">check_circle</span> Query returned \${message.rowCount} rows.</span>\`;
+                        
+                        // Update table with query results
+                        allData = Array.isArray(message.data) ? message.data : [];
+                        filteredData = [...allData];
+                        totalRows = message.rowCount || allData.length;
+                        columns = allData.length > 0 ? Object.keys(allData[0]) : [];
+                        visibleColumns = [...columns];
+                        
+                        analyzeColumns();
+                        initTable();
+                        updateTotalCount();
+                        renderPagination();
                     } else if (message.command === 'queryError') {
-                        displayQueryError(message.error);
+                        const status = document.getElementById('queryStatus');
+                        status.innerHTML = \`<span class="text-red-600 font-medium">Error: \${message.error}</span>\`;
                     } else if (message.command === 'aiQueryResult') {
-                        displayAIQuery(message.sqlQuery);
+                        document.getElementById('queryInput').value = message.sqlQuery;
+                        setQueryMode('sql');
+                        const status = document.getElementById('queryStatus');
+                        status.innerHTML = \`<span class="inline-flex items-center gap-1 text-green-600"><span class="material-symbols-outlined text-sm">check_circle</span> SQL query generated.</span>\`;
                     } else if (message.command === 'aiQueryError') {
-                        displayAIError(message.error);
+                        const status = document.getElementById('queryStatus');
+                        status.innerHTML = \`<span class="text-red-600 font-medium">AI Error: \${message.error}</span>\`;
                     }
                 });
 
-                // Add click outside filter handler
-                document.addEventListener('click', function(event) {
-                    const target = event.target;
-                    
-                    // Check if click is outside any filter container
-                    const isClickInsideFilter = target.closest('.column-filter') || 
-                                           target.closest('.filter-operator-select') || 
-                                           target.closest('.filter-value-container') ||
-                                           target.closest('th');
-                    
-                    if (!isClickInsideFilter) {
-                        // Hide all visible filters
-                        columns.forEach((_, idx) => {
-                            const filterDiv = document.getElementById('filter-' + idx);
-                            if (filterDiv && filterDiv.style.display === 'block') {
-                                hideColumnFilter(idx);
-                            }
-                        });
-                    }
-                });
-
-                renderTable();
+                // Initialize
+                analyzeColumns();
+                initTable();
+                updateTotalCount();
+                renderPagination();
             </script>
         </body>
-        </html>`;
+        </html>\`;
+        </html>
+`;
     }
+
 
     getConnections(): DatabaseItem[] {
         return this.connections;

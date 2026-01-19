@@ -8,21 +8,21 @@ build: patch-version
 	npm run compile && vsce package
 	@echo "Creating latest version package..."
 	@rm -rf ./simple-db-latest.vsix
-	@cp $(shell ls ./simple-db-*.vsix | head -1) ./simple-db-latest.vsix
+	@cp ./simple-db-$(shell python3 -c "import json; print(json.load(open('package.json'))['version'])").vsix ./simple-db-latest.vsix
 
 # Major version and build
 build-major: major-version
 	npm run compile && vsce package
 	@echo "Creating latest version package..."
 	@rm -rf ./simple-db-latest.vsix
-	@cp $(shell ls ./simple-db-*.vsix | head -1) ./simple-db-latest.vsix
+	@cp ./simple-db-$(shell python3 -c "import json; print(json.load(open('package.json'))['version'])").vsix ./simple-db-latest.vsix
 
 # Minor version and build
 build-minor: minor-version
 	npm run compile && vsce package
 	@echo "Creating latest version package..."
 	@rm -rf ./simple-db-latest.vsix
-	@cp $(shell ls ./simple-db-*.vsix | head -1) ./simple-db-latest.vsix
+	@cp ./simple-db-$(shell python3 -c "import json; print(json.load(open('package.json'))['version'])").vsix ./simple-db-latest.vsix
 
 # Patch version number (0.0.x)
 patch-version:
@@ -150,6 +150,7 @@ publish:
 	vsce publish
 	@echo "Extension published successfully"
 
+release: build publish
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
