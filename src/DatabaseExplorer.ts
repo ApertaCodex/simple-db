@@ -317,11 +317,7 @@ export class DatabaseExplorer {
                             if (connection.type === 'sqlite') {
                                 result = await this.executeQuery(connection.path, message.query);
                             } else {
-                                panel.webview.postMessage({
-                                    command: 'queryError',
-                                    error: 'MongoDB query execution not yet implemented'
-                                });
-                                return;
+                                result = await this.executeMongoQuery(connection.path, message.query, item.tableName);
                             }
 
                             panel.webview.postMessage({
@@ -660,8 +656,7 @@ Rules:
                         result = await this.executeQuery(connection.path, message.query);
                     } else {
                         // MongoDB query execution
-                        vscode.window.showWarningMessage('MongoDB query execution not yet implemented');
-                        return;
+                        result = await this.executeMongoQuery(connection.path, message.query, item.tableName);
                     }
 
                     panel.webview.postMessage({
@@ -698,6 +693,71 @@ Rules:
             });
         } catch (error) {
             throw new Error(`Query execution failed: ${error}`);
+        }
+    }
+
+    private async executeMongoQuery(connectionString: string, query: string, collectionName: string): Promise<any> {
+        try {
+            // Parse MongoDB query - it could be a filter object or a command
+            query = query.trim();
+            
+            // Handle db.collection.find() style queries
+            const findMatch = query.match(/db\.\w+\.find\((.*)\)/);
+            const countMatch = query.match(/db\.\w+\.(?:countDocuments|count)\((.*)\)/);
+            const aggregateMatch = query.match(/db\.\w+\.aggregate\((.*)\)/);
+            
+            let filter: any = {};
+            let limit = 1000;
+            
+            if (findMatch) {
+                // Extract filter from find query
+                const filterStr = findMatch[1].trim();
+                if (filterStr && filterStr !== '{}') {
+                    try {
+                        // Try to parse as JSON
+                        filter = JSON.parse(filterStr);
+                    } catch {
+                        // If not valid JSON, try to evaluate it safely
+                        try {
+                            filter = eval('(' + filterStr + ')');
+                        } catch {
+                            throw new Error('Invalid filter syntax. Use valid JSON or JavaScript object notation.');
+                        }
+                    }
+                }
+                const result = await this.mongoManager.executeQuery(connectionString, collectionName, filter, limit);
+                return { data: result };
+            } else if (countMatch) {
+                // Handle count queries
+                const filterStr = countMatch[1].trim();
+                if (filterStr && filterStr !== '{}') {
+                    try {
+                        filter = JSON.parse(filterStr);
+                    } catch {
+                        filter = eval('(' + filterStr + ')');
+                    }
+                }
+                const count = await this.mongoManager.getCollectionCount(connectionString, collectionName);
+                return { data: [{ count }] };
+            } else if (aggregateMatch) {
+                // For aggregate, we'll need to add support in MongoDBManager
+                throw new Error('Aggregate queries are not yet supported. Use find() queries.');
+            } else {
+                // Try to parse as a plain filter object
+                try {
+                    if (query === '' || query === '{}') {
+                        filter = {};
+                    } else {
+                        filter = JSON.parse(query);
+                    }
+                    const result = await this.mongoManager.executeQuery(connectionString, collectionName, filter, limit);
+                    return { data: result };
+                } catch {
+                    throw new Error('Invalid query format. Use MongoDB find() syntax: db.collection.find({field: "value"}) or JSON filter: {"field": "value"}');
+                }
+            }
+        } catch (error) {
+            throw new Error(`MongoDB query execution failed: ${error}`);
         }
     }
 
@@ -1055,6 +1115,89 @@ Rules:
                 ::-webkit-scrollbar-thumb:hover {
                     background: #555555;
                 }
+                
+                .json-modal {
+                    position: fixed;
+                    inset: 0;
+                    z-index: 1000;
+                    display: none;
+                    align-items: center;
+                    justify-content: center;
+                    background-color: rgba(0, 0, 0, 0.7);
+                }
+                
+                .json-modal.show {
+                    display: flex;
+                }
+                
+                .json-modal-content {
+                    background-color: var(--bg-secondary);
+                    border-radius: 8px;
+                    max-width: 90%;
+                    max-height: 90vh;
+                    width: 800px;
+                    display: flex;
+                    flex-direction: column;
+                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+                }
+                
+                .json-modal-header {
+                    padding: 16px 20px;
+                    border-bottom: 1px solid var(--border-color);
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                
+                .json-modal-body {
+                    padding: 20px;
+                    overflow: auto;
+                    flex: 1;
+                }
+                
+                .json-modal-pre {
+                    margin: 0;
+                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                    font-size: 13px;
+                    white-space: pre-wrap;
+                    color: var(--text-primary);
+                }
+                
+                .json-modal-close {
+                    background: transparent;
+                    border: none;
+                    color: var(--text-secondary);
+                    font-size: 24px;
+                    cursor: pointer;
+                    padding: 4px 8px;
+                }
+                
+                .json-modal-close:hover {
+                    color: var(--text-primary);
+                }
+                
+                .json-copy-btn {
+                    background-color: var(--accent);
+                    color: white;
+                    border: none;
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 12px;
+                    margin-left: 10px;
+                }
+                
+                .json-copy-btn:hover {
+                    background-color: var(--accent-hover);
+                }
+                
+                .results-table tr {
+                    cursor: pointer;
+                }
+                
+                .results-table tr:hover {
+                    background-color: var(--row-hover);
+                }
             </style>
         </head>
         <body>
@@ -1081,8 +1224,24 @@ Rules:
                 </div>
             </div>
             
+            <div class="json-modal" id="jsonModal" onclick="closeJsonModal()">
+                <div class="json-modal-content" onclick="event.stopPropagation()">
+                    <div class="json-modal-header">
+                        <div>
+                            <strong>Row Data (JSON)</strong>
+                            <button class="json-copy-btn" onclick="copyJsonToClipboard()">Copy</button>
+                        </div>
+                        <button class="json-modal-close" onclick="closeJsonModal()">×</button>
+                    </div>
+                    <div class="json-modal-body">
+                        <pre class="json-modal-pre" id="jsonContent"></pre>
+                    </div>
+                </div>
+            </div>
+            
             <script>
                 const vscode = acquireVsCodeApi();
+                let currentResultData = [];
                 
                 function clearQuery() {
                     document.getElementById('query-input').value = '';
@@ -1101,6 +1260,33 @@ Rules:
                     });
                 }
                 
+                function openJsonModal(rowIndex) {
+                    const row = currentResultData[rowIndex];
+                    const modal = document.getElementById('jsonModal');
+                    const content = document.getElementById('jsonContent');
+                    
+                    content.textContent = JSON.stringify(row, null, 2);
+                    modal.classList.add('show');
+                }
+                
+                function closeJsonModal() {
+                    document.getElementById('jsonModal').classList.remove('show');
+                }
+                
+                function copyJsonToClipboard() {
+                    const content = document.getElementById('jsonContent').textContent;
+                    navigator.clipboard.writeText(content).then(() => {
+                        const btn = event.target;
+                        const originalText = btn.textContent;
+                        btn.textContent = 'Copied!';
+                        setTimeout(() => {
+                            btn.textContent = originalText;
+                        }, 2000);
+                    }).catch(err => {
+                        console.error('Failed to copy:', err);
+                    });
+                }
+                
                 function showResults(data) {
                     document.getElementById('loading').style.display = 'none';
                     
@@ -1116,6 +1302,8 @@ Rules:
                         return;
                     }
                     
+                    currentResultData = data.data;
+                    
                     const columns = Object.keys(data.data[0]);
                     let html = '<table class="results-table"><thead><tr>';
                     columns.forEach(col => {
@@ -1123,10 +1311,23 @@ Rules:
                     });
                     html += '</tr></thead><tbody>';
                     
-                    data.data.forEach(row => {
-                        html += '<tr>';
+                    data.data.forEach((row, rowIndex) => {
+                        html += '<tr ondblclick="openJsonModal(' + rowIndex + ')" style="cursor: pointer;">';
                         columns.forEach(col => {
-                            html += '<td>' + (row[col] === null ? 'NULL' : row[col]) + '</td>';
+                            const value = row[col];
+                            let displayValue;
+                            if (value === null || value === undefined) {
+                                displayValue = 'NULL';
+                            } else if (typeof value === 'object') {
+                                // Handle arrays and objects
+                                const jsonStr = JSON.stringify(value);
+                                const escaped = jsonStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                                displayValue = escaped;
+                            } else {
+                                const escaped = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                displayValue = escaped;
+                            }
+                            html += '<td>' + displayValue + '</td>';
                         });
                         html += '</tr>';
                     });
@@ -1145,6 +1346,13 @@ Rules:
                         case 'queryError':
                             showResults({ error: message.error });
                             break;
+                    }
+                });
+                
+                // Close modal on Escape key
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        closeJsonModal();
                     }
                 });
                 
@@ -1577,6 +1785,26 @@ Rules:
         </div>
     </div>
 
+    <div class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" id="jsonModal" onclick="closeJsonModal(event)">
+        <div class="bg-white dark:bg-zinc-900 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onclick="event.stopPropagation()">
+            <div class="p-4 border-b border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-800 rounded-t-lg flex justify-between items-center">
+                <h3 class="font-semibold text-lg text-gray-700 dark:text-zinc-200">
+                    <span class="material-symbols-outlined text-xl align-middle mr-2">data_object</span>
+                    Row Data (JSON)
+                </h3>
+                <div class="flex gap-2">
+                    <button onclick="copyJsonToClipboard()" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-1">
+                        <span class="material-symbols-outlined text-sm">content_copy</span> Copy
+                    </button>
+                    <button class="text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200 text-2xl" onclick="closeJsonModal(event)">×</button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-auto p-4 custom-scrollbar">
+                <pre id="jsonContent" class="text-sm font-mono text-gray-800 dark:text-zinc-200 whitespace-pre-wrap"></pre>
+            </div>
+        </div>
+    </div>
+
     <script>
         const vscode = acquireVsCodeApi();
         let allData = ${dataJson};
@@ -1656,15 +1884,38 @@ Rules:
             const end = start + state.rowsPerPage;
             const pageData = filteredData.slice(start, end);
 
-            tbody.innerHTML = pageData.map((row) => \`<tr class="hover:bg-gray-50 dark:hover:bg-zinc-800">\${visibleColumns.map(col => {
-                const value = row[col];
-                let content = value === null || value === undefined ? '<span class="text-gray-400 dark:text-zinc-500 italic">NULL</span>' : String(value);
-                let cls = '';
-                if (value === null || value === undefined) cls = 'text-gray-400 dark:text-zinc-500';
-                else if (typeof value === 'boolean') cls = value ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
-                else if (typeof value === 'number') cls = 'text-blue-600 dark:text-blue-400 font-mono';
-                return \`<td class="px-6 py-3 whitespace-nowrap \${cls}">\${content}</td>\`;
-            }).join('')}</tr>\`).join('');
+            tbody.innerHTML = pageData.map((row, rowIndex) => {
+                const cells = visibleColumns.map(col => {
+                    const value = row[col];
+                    let content;
+                    let cls = '';
+                    
+                    if (value === null || value === undefined) {
+                        content = '<span class="text-gray-400 dark:text-zinc-500 italic">NULL</span>';
+                        cls = 'text-gray-400 dark:text-zinc-500';
+                    } else if (typeof value === 'boolean') {
+                        content = String(value);
+                        cls = value ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
+                    } else if (typeof value === 'number') {
+                        content = String(value);
+                        cls = 'text-blue-600 dark:text-blue-400 font-mono';
+                    } else if (typeof value === 'object') {
+                        // Handle arrays and objects
+                        const jsonStr = JSON.stringify(value);
+                        const escaped = jsonStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                        content = '<span class="text-purple-600 dark:text-purple-400 font-mono text-xs">' + escaped + '</span>';
+                        cls = 'text-purple-600 dark:text-purple-400';
+                    } else {
+                        // Escape HTML in string values
+                        const escaped = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        content = escaped;
+                    }
+                    
+                    return '<td class="px-6 py-3 whitespace-nowrap ' + cls + '">' + content + '</td>';
+                }).join('');
+                
+                return '<tr class="hover:bg-gray-50 dark:hover:bg-zinc-800 cursor-pointer" ondblclick="openJsonModal(' + (start + rowIndex) + ')">' + cells + '</tr>';
+            }).join('');
         }
 
         function handleSort(event, col) {
@@ -1688,7 +1939,8 @@ Rules:
             let temp = allData.filter(row => {
                 for (let col in state.columnFilters) {
                     const filter = state.columnFilters[col];
-                    const value = String(row[col] || '').toLowerCase();
+                    const cellValue = row[col];
+                    const value = (typeof cellValue === 'object' ? JSON.stringify(cellValue) : String(cellValue || '')).toLowerCase();
                     const filterValue = filter.value.toLowerCase();
                     if (filter.op === 'contains' && !value.includes(filterValue)) return false;
                     if (filter.op === 'equals' && value !== filterValue) return false;
@@ -1697,7 +1949,11 @@ Rules:
                 }
                 if (state.globalSearch) {
                     const searchLower = state.globalSearch.toLowerCase();
-                    const match = visibleColumns.some(col => String(row[col] || '').toLowerCase().includes(searchLower));
+                    const match = visibleColumns.some(col => {
+                        const cellValue = row[col];
+                        const value = (typeof cellValue === 'object' ? JSON.stringify(cellValue) : String(cellValue || '')).toLowerCase();
+                        return value.includes(searchLower);
+                    });
                     if (!match) return false;
                 }
                 return true;
@@ -1941,6 +2197,45 @@ Rules:
             if (!document.getElementById('columnManager').classList.contains('hidden') && 
                 !e.target.closest('#columnManager') && !e.target.closest('button[onclick*="toggleColumnManager"]')) {
                 document.getElementById('columnManager').classList.add('hidden');
+            }
+        });
+
+        function openJsonModal(rowIndex) {
+            const row = filteredData[rowIndex];
+            const modal = document.getElementById('jsonModal');
+            const content = document.getElementById('jsonContent');
+            
+            // Format JSON with syntax highlighting
+            content.textContent = JSON.stringify(row, null, 2);
+            modal.classList.remove('hidden');
+        }
+
+        function closeJsonModal(event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            document.getElementById('jsonModal').classList.add('hidden');
+        }
+
+        function copyJsonToClipboard() {
+            const content = document.getElementById('jsonContent').textContent;
+            navigator.clipboard.writeText(content).then(() => {
+                // Visual feedback
+                const btn = event.target.closest('button');
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '<span class="material-symbols-outlined text-sm">check</span> Copied!';
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+            });
+        }
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeJsonModal();
             }
         });
 
