@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "1.0.10",
+    "version": "2.0.0",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -245,12 +245,12 @@
         "version": "npm version patch && npm run build"
     },
     "devDependencies": {
-        "@types/node": "^18.19.130",
-        "@types/vscode": "^1.105.0",
-        "typescript": "^5.0.0"
+        "@types/node": "^25.0.9",
+        "@types/vscode": "^1.108.1",
+        "typescript": "^5.9.3"
     },
     "dependencies": {
-        "mongoose": "^8.0.3",
+        "mongoose": "^9.1.5",
         "sqlite3": "^5.1.7"
     }
 }
