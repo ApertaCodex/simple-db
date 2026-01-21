@@ -5,21 +5,21 @@ all: build
 
 # Patch version and build
 build: patch-version
-	npm run compile && vsce package
+	pnpm run compile && vsce package --no-dependencies
 	@echo "Creating latest version package..."
 	@rm -rf ./simple-db-latest.vsix
 	@cp ./simple-db-$(shell python3 -c "import json; print(json.load(open('package.json'))['version'])").vsix ./simple-db-latest.vsix
 
 # Major version and build
 build-major: major-version
-	npm run compile && vsce package
+	pnpm run compile && vsce package --no-dependencies
 	@echo "Creating latest version package..."
 	@rm -rf ./simple-db-latest.vsix
 	@cp ./simple-db-$(shell python3 -c "import json; print(json.load(open('package.json'))['version'])").vsix ./simple-db-latest.vsix
 
 # Minor version and build
 build-minor: minor-version
-	npm run compile && vsce package
+	pnpm run compile && vsce package --no-dependencies
 	@echo "Creating latest version package..."
 	@rm -rf ./simple-db-latest.vsix
 	@cp ./simple-db-$(shell python3 -c "import json; print(json.load(open('package.json'))['version'])").vsix ./simple-db-latest.vsix
@@ -147,7 +147,7 @@ uninstall-code-server:
 # Publish to VS Code Marketplace
 publish:
 	@echo "Publishing extension to VS Code Marketplace..."
-	vsce publish
+	vsce publish --no-dependencies
 	@echo "Extension published successfully"
 
 release: build publish

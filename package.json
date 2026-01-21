@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "2.0.1",
+    "version": "2.0.6",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -241,7 +241,7 @@
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
-        "build": "npm run compile && vsce package",
+        "build": "npm run compile && vsce package --no-dependencies",
         "version": "npm version patch && npm run build"
     },
     "devDependencies": {
