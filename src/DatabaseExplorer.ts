@@ -9,6 +9,7 @@ interface DatabaseItem {
     path: string;
     tables: string[];
     tableCounts?: { [tableName: string]: number };
+    countsLoaded?: boolean;
 }
 
 class DatabaseTreeItem extends vscode.TreeItem {
@@ -132,7 +133,8 @@ export class DatabaseExplorer {
             name,
             type: 'sqlite',
             path: filePath,
-            tables: []
+            tables: [],
+            countsLoaded: false
         };
 
         try {
@@ -140,69 +142,7 @@ export class DatabaseExplorer {
             this.connections.push(connection);
             this.saveConnections();
             this._treeDataProvider.refresh();
-            vscode.window.showInformationMessage(`SQLite database "${name}" added successfully`);
-            
-            // Show the first table in webview
-            if (connection.tables.length > 0) {
-                const pageSize = this.defaultPageSize;
-                const data = await this.sqliteManager.getTableData(connection.path, connection.tables[0], pageSize, 0);
-                const totalRows = await this.sqliteManager.getTableRowCount(connection.path, connection.tables[0]);
-                const panel = this.showDataGrid(data, connection.tables[0], totalRows, pageSize, connection.type);
-                
-                // Send database list to webview after a short delay to ensure HTML is loaded
-                setTimeout(() => {
-                    panel.webview.postMessage({
-                        command: 'updateDatabases',
-                        databases: this.connections.map(conn => ({
-                            name: conn.name,
-                            type: conn.type,
-                            tables: conn.tables
-                        })),
-                        currentDatabase: connection.name,
-                        currentTable: connection.tables[0]
-                    });
-                }, 100);
-                
-                // Set up message handlers for this panel
-                panel.webview.onDidReceiveMessage(
-                    async message => {
-                        if (message.command === 'loadTable') {
-                            try {
-                                const dbConnection = this.connections.find(c => c.name === message.database);
-                                if (!dbConnection) {
-                                    panel.webview.postMessage({
-                                        command: 'queryError',
-                                        error: 'Database not found'
-                                    });
-                                    return;
-                                }
-                                
-                                const tableData = await (dbConnection.type === 'sqlite' 
-                                    ? this.sqliteManager.getTableData(dbConnection.path, message.table, pageSize, 0)
-                                    : this.mongoManager.getCollectionData(dbConnection.path, message.table, pageSize, 0));
-                                
-                                const tableRowCount = await (dbConnection.type === 'sqlite'
-                                    ? this.sqliteManager.getTableRowCount(dbConnection.path, message.table)
-                                    : this.mongoManager.getCollectionCount(dbConnection.path, message.table));
-                                
-                                panel.webview.postMessage({
-                                    command: 'tableData',
-                                    data: tableData,
-                                    table: message.table,
-                                    totalRows: tableRowCount
-                                });
-                            } catch (error) {
-                                panel.webview.postMessage({
-                                    command: 'queryError',
-                                    error: error instanceof Error ? error.message : String(error)
-                                });
-                            }
-                        }
-                    },
-                    undefined,
-                    this._disposables
-                );
-            }
+            vscode.window.showInformationMessage(`SQLite database "${name}" added successfully with ${connection.tables.length} tables`);
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to connect to SQLite database: ${error}`);
         }
@@ -225,7 +165,8 @@ export class DatabaseExplorer {
                     name,
                     type: 'mongodb',
                     path: connectionString,
-                    tables: []
+                    tables: [],
+                    countsLoaded: false
                 };
 
                 try {
@@ -233,69 +174,7 @@ export class DatabaseExplorer {
                     this.connections.push(connection);
                     this.saveConnections();
                     this._treeDataProvider.refresh();
-                    vscode.window.showInformationMessage(`MongoDB connection "${name}" added successfully`);
-                    
-                    // Show the first collection in webview
-                    if (connection.tables.length > 0) {
-                        const pageSize = this.defaultPageSize;
-                        const data = await this.mongoManager.getCollectionData(connection.path, connection.tables[0], pageSize, 0);
-                        const totalRows = await this.mongoManager.getCollectionCount(connection.path, connection.tables[0]);
-                        const panel = this.showDataGrid(data, connection.tables[0], totalRows, pageSize, connection.type);
-                        
-                        // Send database list to webview after a short delay
-                        setTimeout(() => {
-                            panel.webview.postMessage({
-                                command: 'updateDatabases',
-                                databases: this.connections.map(conn => ({
-                                    name: conn.name,
-                                    type: conn.type,
-                                    tables: conn.tables
-                                })),
-                                currentDatabase: connection.name,
-                                currentTable: connection.tables[0]
-                            });
-                        }, 100);
-                        
-                        // Set up message handlers for this panel
-                        panel.webview.onDidReceiveMessage(
-                            async message => {
-                                if (message.command === 'loadTable') {
-                                    try {
-                                        const dbConnection = this.connections.find(c => c.name === message.database);
-                                        if (!dbConnection) {
-                                            panel.webview.postMessage({
-                                                command: 'queryError',
-                                                error: 'Database not found'
-                                            });
-                                            return;
-                                        }
-                                        
-                                        const tableData = await (dbConnection.type === 'sqlite' 
-                                            ? this.sqliteManager.getTableData(dbConnection.path, message.table, pageSize, 0)
-                                            : this.mongoManager.getCollectionData(dbConnection.path, message.table, pageSize, 0));
-                                        
-                                        const tableRowCount = await (dbConnection.type === 'sqlite'
-                                            ? this.sqliteManager.getTableRowCount(dbConnection.path, message.table)
-                                            : this.mongoManager.getCollectionCount(dbConnection.path, message.table));
-                                        
-                                        panel.webview.postMessage({
-                                            command: 'tableData',
-                                            data: tableData,
-                                            table: message.table,
-                                            totalRows: tableRowCount
-                                        });
-                                    } catch (error) {
-                                        panel.webview.postMessage({
-                                            command: 'queryError',
-                                            error: error instanceof Error ? error.message : String(error)
-                                        });
-                                    }
-                                }
-                            },
-                            undefined,
-                            this._disposables
-                        );
-                    }
+                    vscode.window.showInformationMessage(`MongoDB connection "${name}" added successfully with ${connection.tables.length} collections`);
                 } catch (error) {
                     vscode.window.showErrorMessage(`Failed to connect to MongoDB: ${error}`);
                 }
@@ -305,6 +184,10 @@ export class DatabaseExplorer {
 
     async refreshTables(connection: DatabaseItem) {
         try {
+            // Reset counts so they get fetched again
+            connection.countsLoaded = false;
+            connection.tableCounts = {};
+            
             if (connection.type === 'mongodb') {
                 const collections = await this.mongoManager.getCollections(connection.path);
                 connection.tables = collections;
@@ -454,7 +337,19 @@ export class DatabaseExplorer {
                         }
                     } else if (message.command === 'generateAIQuery') {
                         try {
-                            if (connection.type !== 'sqlite') {
+                            // Get the current table from the message (webview tracks current table)
+                            const currentTable = message.tableName || item.tableName;
+                            const currentDb = message.database ? this.connections.find(c => c.name === message.database) : connection;
+                            
+                            if (!currentDb) {
+                                panel.webview.postMessage({
+                                    command: 'aiQueryError',
+                                    error: 'Database not found'
+                                });
+                                return;
+                            }
+                            
+                            if (currentDb.type !== 'sqlite') {
                                 panel.webview.postMessage({
                                     command: 'aiQueryError',
                                     error: 'AI query generation is currently only supported for SQLite databases'
@@ -462,7 +357,7 @@ export class DatabaseExplorer {
                                 return;
                             }
 
-                            const sqlQuery = await this.generateAIQuery(item, message.prompt);
+                            const sqlQuery = await this.generateAIQueryForTable(currentDb, currentTable, message.prompt);
                             panel.webview.postMessage({
                                 command: 'aiQueryResult',
                                 sqlQuery: sqlQuery
@@ -606,13 +501,7 @@ export class DatabaseExplorer {
         }
     }
 
-    async generateAIQuery(item: DatabaseTreeItem, prompt: string): Promise<string> {
-        if (!item.connection) {
-            throw new Error('No database connection available');
-        }
-        
-        const connection = item.connection; // Store reference
-        
+    async generateAIQueryForTable(connection: DatabaseItem, tableName: string, prompt: string): Promise<string> {
         try {
             // Get OpenAI API key from environment or settings
             let apiKey = process.env.OPENAI_API_KEY;
@@ -650,14 +539,32 @@ export class DatabaseExplorer {
 
             // Get table schema for context
             let tableSchema = '';
+            let sampleData = '';
             if (connection.type === 'sqlite') {
-                const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
-                const tableData = await this.sqliteManager.getTableData(connection.path, tableName, 1, 0);
+                const tableData = await this.sqliteManager.getTableData(connection.path, tableName, 3, 0);
                 if (tableData.length > 0) {
                     const columns = Object.keys(tableData[0]);
-                    tableSchema = `Table: ${tableName}\nColumns: ${columns.join(', ')}\n`;
+                    tableSchema = `Table: ${tableName}\nColumns: ${columns.join(', ')}`;
+                    // Include sample data to help AI understand column types/values
+                    sampleData = `\nSample data (first ${tableData.length} rows):\n${JSON.stringify(tableData, null, 2)}`;
                 }
             }
+
+            const systemPrompt = `You are a SQL expert. The user is currently viewing the "${tableName}" table. Convert their natural language query to SQL for this specific table.
+
+${tableSchema}${sampleData}
+
+Rules:
+- ALWAYS use the table "${tableName}" - the user is looking at this table right now
+- Only return the raw SQL query, nothing else
+- Use proper SQLite syntax
+- Do not include markdown formatting or code blocks
+- Do not include explanations or comments
+- If the user asks to "show all", "get everything", use SELECT * FROM ${tableName}
+- If the user mentions filtering, use WHERE clauses
+- If the user mentions sorting, use ORDER BY
+- If the user mentions counting or aggregating, use appropriate aggregate functions
+- Default to LIMIT 100 unless user specifies otherwise`;
 
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
@@ -670,7 +577,7 @@ export class DatabaseExplorer {
                     messages: [
                         {
                             role: 'system',
-                            content: `You are a SQL expert. Convert natural language queries to SQL. Only respond with the SQL query, no explanations. Use the table schema provided for context.\n\n${tableSchema}\nRules:\n- Only return the SQL query\n- Use proper SQLite syntax\n- Do not include markdown formatting\n- Do not include explanations`
+                            content: systemPrompt
                         },
                         {
                             role: 'user',
@@ -678,7 +585,7 @@ export class DatabaseExplorer {
                         }
                     ],
                     max_tokens: 500,
-                    temperature: 0.3
+                    temperature: 0.1
                 })
             });
 
@@ -687,16 +594,27 @@ export class DatabaseExplorer {
             }
 
             const data = await response.json() as any;
-            const sqlQuery = data.choices?.[0]?.message?.content?.trim();
+            let sqlQuery = data.choices?.[0]?.message?.content?.trim();
             
             if (!sqlQuery) {
                 throw new Error('No SQL query generated');
             }
 
+            // Clean up any markdown formatting that might have slipped through
+            sqlQuery = sqlQuery.replace(/^```sql\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+
             return sqlQuery;
         } catch (error) {
             throw new Error(`AI query generation failed: ${error}`);
         }
+    }
+    
+    async generateAIQuery(item: DatabaseTreeItem, prompt: string): Promise<string> {
+        if (!item.connection) {
+            throw new Error('No database connection available');
+        }
+        const tableName = item.tableName || (item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown');
+        return this.generateAIQueryForTable(item.connection, tableName, prompt);
     }
 
     async queryTable(item: DatabaseTreeItem) {
@@ -2076,6 +1994,7 @@ export class DatabaseExplorer {
 class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeItem> {
     private _onDidChangeTreeData = new vscode.EventEmitter<DatabaseTreeItem | undefined>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+    private _loadingCounts: Set<string> = new Set();
 
     constructor(private explorer: DatabaseExplorer) {}
 
@@ -2102,30 +2021,58 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
                 new DatabaseTreeItem(connection, connection.name, vscode.TreeItemCollapsibleState.Expanded, 'connection')
             );
         } else if (element.contextValue === 'connection' && element.connection) {
-            // Fetch record counts for all tables
-            const tableCountPromises = element.connection.tables.map(async (table: string) => {
-                let count = 0;
-                try {
-                    if (element.connection!.type === 'sqlite') {
-                        count = await this.explorer.sqliteManager.getTableRowCount(element.connection!.path, table);
-                    } else {
-                        count = await this.explorer.mongoManager.getCollectionCount(element.connection!.path, table);
-                    }
-                } catch (error) {
-                    // If count fails, use 0
-                    count = 0;
-                }
-                return { table, count };
-            });
-
-            const tableCounts = await Promise.all(tableCountPromises);
+            const connection = element.connection;
             
-            const items = tableCounts.map(({ table, count }) =>
-                new DatabaseTreeItem(element.connection, table, vscode.TreeItemCollapsibleState.None, 'table', count)
-            );
-
+            // If counts are already loaded, use them
+            if (connection.countsLoaded && connection.tableCounts) {
+                return connection.tables.map(table => 
+                    new DatabaseTreeItem(connection, table, vscode.TreeItemCollapsibleState.None, 'table', connection.tableCounts![table])
+                );
+            }
+            
+            // Show tables immediately without counts, then fetch counts in background
+            const items = connection.tables.map(table => {
+                const count = connection.tableCounts?.[table];
+                return new DatabaseTreeItem(connection, table, vscode.TreeItemCollapsibleState.None, 'table', count);
+            });
+            
+            // Fetch counts in background if not already loading
+            if (!this._loadingCounts.has(connection.name)) {
+                this._loadingCounts.add(connection.name);
+                this.fetchTableCountsAsync(connection).then(() => {
+                    this._loadingCounts.delete(connection.name);
+                });
+            }
+            
             return items;
         }
         return [];
+    }
+    
+    private async fetchTableCountsAsync(connection: DatabaseItem): Promise<void> {
+        try {
+            connection.tableCounts = connection.tableCounts || {};
+            
+            // Fetch counts one by one to show progress faster
+            for (const table of connection.tables) {
+                try {
+                    let count = 0;
+                    if (connection.type === 'sqlite') {
+                        count = await this.explorer.sqliteManager.getTableRowCount(connection.path, table);
+                    } else {
+                        count = await this.explorer.mongoManager.getCollectionCount(connection.path, table);
+                    }
+                    connection.tableCounts[table] = count;
+                    // Refresh the tree to show updated count
+                    this._onDidChangeTreeData.fire(undefined);
+                } catch (error) {
+                    connection.tableCounts[table] = 0;
+                }
+            }
+            
+            connection.countsLoaded = true;
+        } catch (error) {
+            console.error('Failed to fetch table counts:', error);
+        }
     }
 }

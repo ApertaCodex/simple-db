@@ -272,10 +272,7 @@
                     <select
                         class="w-full text-sm border-gray-300 border rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
                         id="sampleQueries" onchange="loadSampleQuery(this.value)">
-                        <option value="">-- Load a Sample Query --</option>
-                        <option value="SELECT * FROM {{table}} LIMIT 10">First 10 Rows</option>
-                        <option value="SELECT COUNT(*) as total FROM {{table}}">Count All Records</option>
-                        <option value="SELECT * FROM {{table}} ORDER BY RANDOM() LIMIT 10">Random 10 Records</option>
+                        <option value="">-- Sample Queries --</option>
                     </select>
                 </div>
             </div>
@@ -715,6 +712,7 @@
                     analyzeColumns();
                     processData();
                     initTable();
+                    populateSampleQueries();
                     
                     console.log('Data loaded successfully');
                 } else {
@@ -1071,10 +1069,12 @@
 
         function populateSampleQueries() {
             const select = document.getElementById('sampleQueries');
-            const currentTable = document.getElementById('tableSelect')?.value;
+            const currentTable = currentTableName || document.getElementById('tableSelect')?.value;
+            if (!currentTable) return;
             let defaults = [
                 { label: "First 10 Rows", sql: `SELECT * FROM "${currentTable}" LIMIT 10` },
-                { label: "Record Count", sql: `SELECT COUNT(*) FROM "${currentTable}"` }
+                { label: "Record Count", sql: `SELECT COUNT(*) FROM "${currentTable}"` },
+                { label: "Random 10 Records", sql: `SELECT * FROM "${currentTable}" ORDER BY RANDOM() LIMIT 10` }
             ];
             const filtered = suggestedQueries.filter(q => q.table === currentTable);
             select.innerHTML = '<option value="">-- Sample Queries --</option>' +
@@ -1096,11 +1096,13 @@
             const isAiMode = document.getElementById('modeAi').classList.contains('bg-white');
             if (isAiMode) {
                 if (isVSCodeWebview && vscode) {
-                    // Send AI query request to VS Code extension
+                    // Send AI query request to VS Code extension with current table context
                     status.innerHTML = '✨ Generating SQL...';
                     vscode.postMessage({
                         command: 'generateAIQuery',
-                        prompt: sql
+                        prompt: sql,
+                        tableName: currentTableName,
+                        database: currentDbName
                     });
                 } else {
                     status.innerHTML = '✨ Generating SQL...';
@@ -1564,6 +1566,7 @@
                             analyzeColumns();
                             processData();
                             initTable();
+                            populateSampleQueries();
                         }
                         break;
                         
