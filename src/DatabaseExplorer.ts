@@ -15,7 +15,7 @@ class DatabaseTreeItem extends vscode.TreeItem {
     public readonly tableName: string;
 
     constructor(
-        public readonly connection: DatabaseItem,
+        public readonly connection: DatabaseItem | null,
         label: string,
         public readonly collapsibleState: vscode.TreeItemCollapsibleState,
         public readonly contextValue: string,
@@ -23,7 +23,37 @@ class DatabaseTreeItem extends vscode.TreeItem {
     ) {
         super(label, collapsibleState);
         this.tableName = label;
-        this.tooltip = `${this.connection.name} - ${label}`;
+        
+        // Handle empty state items
+        if (contextValue === 'emptyState' || contextValue === 'actionButton') {
+            this.tooltip = label;
+            this.contextValue = contextValue;
+            
+            if (contextValue === 'emptyState') {
+                this.iconPath = new vscode.ThemeIcon('info');
+                this.description = '';
+            } else if (contextValue === 'actionButton') {
+                this.iconPath = new vscode.ThemeIcon('add');
+                // Set command for action buttons
+                if (label.includes('SQLite')) {
+                    this.command = {
+                        command: 'simpleDB.addSQLite',
+                        title: 'Add SQLite Database'
+                    };
+                } else if (label.includes('MongoDB')) {
+                    this.command = {
+                        command: 'simpleDB.addMongoDB',
+                        title: 'Add MongoDB Connection'
+                    };
+                }
+            }
+            return;
+        }
+        
+        // Normal tree items
+        if (connection) {
+            this.tooltip = `${connection.name} - ${label}`;
+        }
         this.contextValue = contextValue;
 
         // Show record count on the right side of the row
@@ -31,9 +61,9 @@ class DatabaseTreeItem extends vscode.TreeItem {
             this.description = `${recordCount.toLocaleString()} rows`;
         }
 
-        if (contextValue === 'connection') {
-            this.iconPath = new vscode.ThemeIcon(this.connection.type === 'sqlite' ? 'database' : 'server');
-        } else {
+        if (contextValue === 'connection' && connection) {
+            this.iconPath = new vscode.ThemeIcon(connection.type === 'sqlite' ? 'database' : 'server');
+        } else if (contextValue === 'table') {
             this.iconPath = new vscode.ThemeIcon('table');
             // Auto-open table data on click
             this.command = {
@@ -111,6 +141,68 @@ export class DatabaseExplorer {
             this.saveConnections();
             this._treeDataProvider.refresh();
             vscode.window.showInformationMessage(`SQLite database "${name}" added successfully`);
+            
+            // Show the first table in webview
+            if (connection.tables.length > 0) {
+                const pageSize = this.defaultPageSize;
+                const data = await this.sqliteManager.getTableData(connection.path, connection.tables[0], pageSize, 0);
+                const totalRows = await this.sqliteManager.getTableRowCount(connection.path, connection.tables[0]);
+                const panel = this.showDataGrid(data, connection.tables[0], totalRows, pageSize, connection.type);
+                
+                // Send database list to webview after a short delay to ensure HTML is loaded
+                setTimeout(() => {
+                    panel.webview.postMessage({
+                        command: 'updateDatabases',
+                        databases: this.connections.map(conn => ({
+                            name: conn.name,
+                            type: conn.type,
+                            tables: conn.tables
+                        })),
+                        currentDatabase: connection.name,
+                        currentTable: connection.tables[0]
+                    });
+                }, 100);
+                
+                // Set up message handlers for this panel
+                panel.webview.onDidReceiveMessage(
+                    async message => {
+                        if (message.command === 'loadTable') {
+                            try {
+                                const dbConnection = this.connections.find(c => c.name === message.database);
+                                if (!dbConnection) {
+                                    panel.webview.postMessage({
+                                        command: 'queryError',
+                                        error: 'Database not found'
+                                    });
+                                    return;
+                                }
+                                
+                                const tableData = await (dbConnection.type === 'sqlite' 
+                                    ? this.sqliteManager.getTableData(dbConnection.path, message.table, pageSize, 0)
+                                    : this.mongoManager.getCollectionData(dbConnection.path, message.table, pageSize, 0));
+                                
+                                const tableRowCount = await (dbConnection.type === 'sqlite'
+                                    ? this.sqliteManager.getTableRowCount(dbConnection.path, message.table)
+                                    : this.mongoManager.getCollectionCount(dbConnection.path, message.table));
+                                
+                                panel.webview.postMessage({
+                                    command: 'tableData',
+                                    data: tableData,
+                                    table: message.table,
+                                    totalRows: tableRowCount
+                                });
+                            } catch (error) {
+                                panel.webview.postMessage({
+                                    command: 'queryError',
+                                    error: error instanceof Error ? error.message : String(error)
+                                });
+                            }
+                        }
+                    },
+                    undefined,
+                    this._disposables
+                );
+            }
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to connect to SQLite database: ${error}`);
         }
@@ -142,6 +234,68 @@ export class DatabaseExplorer {
                     this.saveConnections();
                     this._treeDataProvider.refresh();
                     vscode.window.showInformationMessage(`MongoDB connection "${name}" added successfully`);
+                    
+                    // Show the first collection in webview
+                    if (connection.tables.length > 0) {
+                        const pageSize = this.defaultPageSize;
+                        const data = await this.mongoManager.getCollectionData(connection.path, connection.tables[0], pageSize, 0);
+                        const totalRows = await this.mongoManager.getCollectionCount(connection.path, connection.tables[0]);
+                        const panel = this.showDataGrid(data, connection.tables[0], totalRows, pageSize, connection.type);
+                        
+                        // Send database list to webview after a short delay
+                        setTimeout(() => {
+                            panel.webview.postMessage({
+                                command: 'updateDatabases',
+                                databases: this.connections.map(conn => ({
+                                    name: conn.name,
+                                    type: conn.type,
+                                    tables: conn.tables
+                                })),
+                                currentDatabase: connection.name,
+                                currentTable: connection.tables[0]
+                            });
+                        }, 100);
+                        
+                        // Set up message handlers for this panel
+                        panel.webview.onDidReceiveMessage(
+                            async message => {
+                                if (message.command === 'loadTable') {
+                                    try {
+                                        const dbConnection = this.connections.find(c => c.name === message.database);
+                                        if (!dbConnection) {
+                                            panel.webview.postMessage({
+                                                command: 'queryError',
+                                                error: 'Database not found'
+                                            });
+                                            return;
+                                        }
+                                        
+                                        const tableData = await (dbConnection.type === 'sqlite' 
+                                            ? this.sqliteManager.getTableData(dbConnection.path, message.table, pageSize, 0)
+                                            : this.mongoManager.getCollectionData(dbConnection.path, message.table, pageSize, 0));
+                                        
+                                        const tableRowCount = await (dbConnection.type === 'sqlite'
+                                            ? this.sqliteManager.getTableRowCount(dbConnection.path, message.table)
+                                            : this.mongoManager.getCollectionCount(dbConnection.path, message.table));
+                                        
+                                        panel.webview.postMessage({
+                                            command: 'tableData',
+                                            data: tableData,
+                                            table: message.table,
+                                            totalRows: tableRowCount
+                                        });
+                                    } catch (error) {
+                                        panel.webview.postMessage({
+                                            command: 'queryError',
+                                            error: error instanceof Error ? error.message : String(error)
+                                        });
+                                    }
+                                }
+                            },
+                            undefined,
+                            this._disposables
+                        );
+                    }
                 } catch (error) {
                     vscode.window.showErrorMessage(`Failed to connect to MongoDB: ${error}`);
                 }
@@ -170,7 +324,10 @@ export class DatabaseExplorer {
     }
 
     async removeConnection(item: DatabaseTreeItem) {
-        const index = this.connections.findIndex(c => c.name === item.connection.name);
+        if (!item.connection) {
+            return;
+        }
+        const index = this.connections.findIndex(c => c.name === item.connection!.name);
         if (index !== -1) {
             this.connections.splice(index, 1);
             this.saveConnections();
@@ -180,28 +337,61 @@ export class DatabaseExplorer {
     }
 
     async viewData(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            vscode.window.showErrorMessage('No database connection available');
+            return;
+        }
+        
+        const connection = item.connection; // Store reference for callbacks
+        
         try {
             const pageSize = this.defaultPageSize;
             let data: any[] = [];
             let totalRows = 0;
 
-            if (item.connection.type === 'sqlite') {
+            if (connection.type === 'sqlite') {
                 [data, totalRows] = await Promise.all([
-                    this.sqliteManager.getTableData(item.connection.path, item.tableName, pageSize, 0),
-                    this.sqliteManager.getTableRowCount(item.connection.path, item.tableName)
+                    this.sqliteManager.getTableData(connection.path, item.tableName, pageSize, 0),
+                    this.sqliteManager.getTableRowCount(connection.path, item.tableName)
                 ]);
             } else {
                 [data, totalRows] = await Promise.all([
-                    this.mongoManager.getCollectionData(item.connection.path, item.tableName, pageSize, 0),
-                    this.mongoManager.getCollectionCount(item.connection.path, item.tableName)
+                    this.mongoManager.getCollectionData(connection.path, item.tableName, pageSize, 0),
+                    this.mongoManager.getCollectionCount(connection.path, item.tableName)
                 ]);
             }
 
-            const panel = this.showDataGrid(data, item.tableName, totalRows, pageSize, item.connection.type);
+            const panel = this.showDataGrid(data, item.tableName, totalRows, pageSize, connection.type);
+
+            // Send database list and selection to webview
+            panel.webview.postMessage({
+                command: 'updateDatabases',
+                databases: this.connections.map(conn => ({
+                    name: conn.name,
+                    type: conn.type,
+                    tables: conn.tables
+                })),
+                currentDatabase: connection.name,
+                currentTable: item.tableName
+            });
 
             panel.webview.onDidReceiveMessage(
                 async message => {
-                    if (message.command === 'loadPage') {
+                    if (message.command === 'export') {
+                        try {
+                            const uri = await vscode.window.showSaveDialog({
+                                defaultUri: vscode.Uri.file(message.filename || 'export.csv'),
+                                filters: { 'CSV Files': ['csv'] }
+                            });
+
+                            if (uri) {
+                                await vscode.workspace.fs.writeFile(uri, Buffer.from(message.data, 'utf8'));
+                                vscode.window.showInformationMessage(`Data exported to ${uri.fsPath}`);
+                            }
+                        } catch (error) {
+                            vscode.window.showErrorMessage(`Export failed: ${error}`);
+                        }
+                    } else if (message.command === 'loadPage') {
                         const requestedPageSize = this.normalizePageSize(message.pageSize, pageSize);
                         const totalPages = Math.max(1, Math.ceil(totalRows / requestedPageSize));
                         const requestedPage = this.normalizePageNumber(message.page, totalPages);
@@ -209,16 +399,16 @@ export class DatabaseExplorer {
 
                         try {
                             let pageData: any[] = [];
-                            if (item.connection.type === 'sqlite') {
+                            if (connection.type === 'sqlite') {
                                 pageData = await this.sqliteManager.getTableData(
-                                    item.connection.path,
+                                    connection.path,
                                     item.tableName,
                                     requestedPageSize,
                                     offset
                                 );
                             } else {
                                 pageData = await this.mongoManager.getCollectionData(
-                                    item.connection.path,
+                                    connection.path,
                                     item.tableName,
                                     requestedPageSize,
                                     offset
@@ -241,8 +431,8 @@ export class DatabaseExplorer {
                     } else if (message.command === 'executeQuery') {
                         try {
                             let result;
-                            if (item.connection.type === 'sqlite') {
-                                result = await this.executeQuery(item.connection.path, message.query);
+                            if (connection.type === 'sqlite') {
+                                result = await this.executeQuery(connection.path, message.query);
                             } else {
                                 panel.webview.postMessage({
                                     command: 'queryError',
@@ -264,7 +454,7 @@ export class DatabaseExplorer {
                         }
                     } else if (message.command === 'generateAIQuery') {
                         try {
-                            if (item.connection.type !== 'sqlite') {
+                            if (connection.type !== 'sqlite') {
                                 panel.webview.postMessage({
                                     command: 'aiQueryError',
                                     error: 'AI query generation is currently only supported for SQLite databases'
@@ -283,6 +473,38 @@ export class DatabaseExplorer {
                                 error: error instanceof Error ? error.message : String(error)
                             });
                         }
+                    } else if (message.command === 'loadTable') {
+                        // Handle table switch from webview
+                        try {
+                            const dbConnection = this.connections.find(c => c.name === message.database);
+                            if (!dbConnection) {
+                                panel.webview.postMessage({
+                                    command: 'queryError',
+                                    error: 'Database not found'
+                                });
+                                return;
+                            }
+                            
+                            const tableData = await (dbConnection.type === 'sqlite' 
+                                ? this.sqliteManager.getTableData(dbConnection.path, message.table, pageSize, 0)
+                                : this.mongoManager.getCollectionData(dbConnection.path, message.table, pageSize, 0));
+                            
+                            const tableRowCount = await (dbConnection.type === 'sqlite'
+                                ? this.sqliteManager.getTableRowCount(dbConnection.path, message.table)
+                                : this.mongoManager.getCollectionCount(dbConnection.path, message.table));
+                            
+                            panel.webview.postMessage({
+                                command: 'tableData',
+                                data: tableData,
+                                table: message.table,
+                                totalRows: tableRowCount
+                            });
+                        } catch (error) {
+                            panel.webview.postMessage({
+                                command: 'queryError',
+                                error: error instanceof Error ? error.message : String(error)
+                            });
+                        }
                     }
                 },
                 undefined,
@@ -294,30 +516,44 @@ export class DatabaseExplorer {
     }
 
     async openQueryConsole(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            vscode.window.showErrorMessage('No database connection available');
+            return;
+        }
+        
+        const connection = item.connection; // Store reference for callbacks
+        
         try {
             const pageSize = this.defaultPageSize;
             let data;
-            if (item.connection.type === 'sqlite') {
-                data = await this.sqliteManager.getTableData(item.connection.path, item.tableName, pageSize, 0);
+            if (connection.type === 'sqlite') {
+                data = await this.sqliteManager.getTableData(connection.path, item.tableName, pageSize, 0);
             } else {
-                data = await this.mongoManager.getCollectionData(item.connection.path, item.tableName, pageSize, 0);
+                data = await this.mongoManager.getCollectionData(connection.path, item.tableName, pageSize, 0);
             }
 
-            this.showQueryConsole(data, item.tableName, item.connection.path);
+            this.showQueryConsole(data, item.tableName, connection.path);
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to open query console: ${error}`);
         }
     }
 
     async exportToJSON(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            vscode.window.showErrorMessage('No database connection available');
+            return;
+        }
+        
+        const connection = item.connection; // Store reference
+        
         try {
-            if (item.connection.type !== 'sqlite') {
+            if (connection.type !== 'sqlite') {
                 vscode.window.showErrorMessage('JSON export is currently only supported for SQLite databases');
                 return;
             }
 
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
-            const outputPath = await this.sqliteManager.exportToJSON(item.connection.path, tableName);
+            const outputPath = await this.sqliteManager.exportToJSON(connection.path, tableName);
             vscode.window.showInformationMessage(`Table "${tableName}" exported to JSON: ${outputPath}`);
             
             // Ask if user wants to open the exported file
@@ -337,14 +573,21 @@ export class DatabaseExplorer {
     }
 
     async exportToCSV(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            vscode.window.showErrorMessage('No database connection available');
+            return;
+        }
+        
+        const connection = item.connection; // Store reference
+        
         try {
-            if (item.connection.type !== 'sqlite') {
+            if (connection.type !== 'sqlite') {
                 vscode.window.showErrorMessage('CSV export is currently only supported for SQLite databases');
                 return;
             }
 
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
-            const outputPath = await this.sqliteManager.exportToCSV(item.connection.path, tableName);
+            const outputPath = await this.sqliteManager.exportToCSV(connection.path, tableName);
             vscode.window.showInformationMessage(`Table "${tableName}" exported to CSV: ${outputPath}`);
             
             // Ask if user wants to open the exported file
@@ -364,6 +607,12 @@ export class DatabaseExplorer {
     }
 
     async generateAIQuery(item: DatabaseTreeItem, prompt: string): Promise<string> {
+        if (!item.connection) {
+            throw new Error('No database connection available');
+        }
+        
+        const connection = item.connection; // Store reference
+        
         try {
             // Get OpenAI API key from environment or settings
             let apiKey = process.env.OPENAI_API_KEY;
@@ -401,9 +650,9 @@ export class DatabaseExplorer {
 
             // Get table schema for context
             let tableSchema = '';
-            if (item.connection.type === 'sqlite') {
+            if (connection.type === 'sqlite') {
                 const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
-                const tableData = await this.sqliteManager.getTableData(item.connection.path, tableName, 1, 0);
+                const tableData = await this.sqliteManager.getTableData(connection.path, tableName, 1, 0);
                 if (tableData.length > 0) {
                     const columns = Object.keys(tableData[0]);
                     tableSchema = `Table: ${tableName}\nColumns: ${columns.join(', ')}\n`;
@@ -451,6 +700,13 @@ export class DatabaseExplorer {
     }
 
     async queryTable(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            vscode.window.showErrorMessage('No database connection available');
+            return;
+        }
+        
+        const connection = item.connection; // Store reference for callbacks
+        
         const panel = vscode.window.createWebviewPanel(
             'queryInterface',
             `Query: ${item.tableName}`,
@@ -461,7 +717,7 @@ export class DatabaseExplorer {
             }
         );
 
-        const sampleQueries = item.connection.type === 'sqlite' ? [
+        const sampleQueries = connection.type === 'sqlite' ? [
             { label: 'Select All Records', query: `SELECT * FROM ${item.tableName} LIMIT 100` },
             { label: 'Count Records', query: `SELECT COUNT(*) as total FROM ${item.tableName}` },
             { label: 'Select First 10', query: `SELECT * FROM ${item.tableName} LIMIT 10` },
@@ -482,8 +738,8 @@ export class DatabaseExplorer {
             if (message.command === 'executeQuery') {
                 try {
                     let result;
-                    if (item.connection.type === 'sqlite') {
-                        result = await this.executeQuery(item.connection.path, message.query);
+                    if (connection.type === 'sqlite') {
+                        result = await this.executeQuery(connection.path, message.query);
                     } else {
                         // MongoDB query execution
                         vscode.window.showWarningMessage('MongoDB query execution not yet implemented');
@@ -532,11 +788,88 @@ export class DatabaseExplorer {
             'dataGrid',
             `Data: ${tableName}`,
             vscode.ViewColumn.One,
-            { enableScripts: true }
+            { 
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [vscode.Uri.file(path.join(__dirname, '..'))]
+            }
         );
 
-        panel.webview.html = this.getDataGridHtml(data, tableName, totalRows, pageSize, dbType);
+        // Load the index.html file as webview
+        const htmlPath = path.join(__dirname, '..', 'index.html');
+        const fs = require('fs');
+        let html = fs.readFileSync(htmlPath, 'utf8');
+        
+        // Get all databases and tables for the dropdown (with counts)
+        // We'll fetch counts asynchronously and update the UI
+        const databases = this.connections.map(conn => ({
+            name: conn.name,
+            type: conn.type,
+            tables: conn.tables
+        }));
+        
+        // Inject initial data and configuration BEFORE the main script loads
+        const initScript = `
+            <script>
+                console.log('Injecting initial data...');
+                window.initialTableData = ${JSON.stringify(data)};
+                window.initialTableName = ${JSON.stringify(tableName)};
+                window.initialTotalRows = ${totalRows};
+                window.initialPageSize = ${pageSize};
+                window.dbType = ${JSON.stringify(dbType)};
+                window.isVSCodeWebview = true;
+                window.availableDatabases = ${JSON.stringify(databases)};
+                console.log('Initial data injected:', {
+                    rows: window.initialTableData.length,
+                    table: window.initialTableName,
+                    databases: window.availableDatabases.length
+                });
+            </script>
+        `;
+        
+        // Inject the script in the HEAD (before other scripts load)
+        html = html.replace('</head>', `${initScript}</head>`);
+        
+        panel.webview.html = html;
+        
+        // Fetch table counts asynchronously and send update
+        this.fetchAndSendTableCounts(panel, databases);
+        
         return panel;
+    }
+
+    private async fetchAndSendTableCounts(panel: vscode.WebviewPanel, databases: any[]) {
+        try {
+            const databasesWithCounts = await Promise.all(databases.map(async db => {
+                const conn = this.connections.find(c => c.name === db.name);
+                if (!conn) return db;
+                
+                const tablesWithCounts = await Promise.all(db.tables.map(async (tableName: string) => {
+                    try {
+                        const count = conn.type === 'sqlite'
+                            ? await this.sqliteManager.getTableRowCount(conn.path, tableName)
+                            : await this.mongoManager.getCollectionCount(conn.path, tableName);
+                        return { name: tableName, count };
+                    } catch {
+                        return { name: tableName, count: 0 };
+                    }
+                }));
+                
+                return {
+                    name: db.name,
+                    type: db.type,
+                    tables: tablesWithCounts
+                };
+            }));
+            
+            // Send updated database info with counts
+            panel.webview.postMessage({
+                command: 'updateDatabasesWithCounts',
+                databases: databasesWithCounts
+            });
+        } catch (error) {
+            console.error('Failed to fetch table counts:', error);
+        }
     }
 
     private showQueryConsole(data: any[], tableName: string, dbPath: string) {
@@ -1136,11 +1469,14 @@ export class DatabaseExplorer {
 
     private getDataGridHtml(data: any[], tableName: string, totalRows: number, pageSize: number, dbType: 'sqlite' | 'mongodb'): string {
         const columns = data.length > 0 ? Object.keys(data[0]) : [];
+        const dataJson = JSON.stringify(data);
+        const columnsJson = JSON.stringify(columns);
 
         // Sample queries based on database type
         const sampleQueries = dbType === 'sqlite' ? [
+            { label: 'Select All Records', query: `SELECT * FROM ${tableName} LIMIT 100` },
+            { label: 'Count Records', query: `SELECT COUNT(*) as total FROM ${tableName}` },
             { label: 'First 10 Rows', query: `SELECT * FROM ${tableName} LIMIT 10` },
-            { label: 'Count All Records', query: `SELECT COUNT(*) as total FROM ${tableName}` },
             { label: 'Random 10 Records', query: `SELECT * FROM ${tableName} ORDER BY RANDOM() LIMIT 10` }
         ] : [
             { label: 'Find All Documents', query: `db.${tableName}.find({})` },
@@ -1148,839 +1484,576 @@ export class DatabaseExplorer {
             { label: 'Find First 10', query: `db.${tableName}.find({}).limit(10)` }
         ];
 
-        const sampleOptions = sampleQueries.map((sq, idx) =>
+        const sampleOptions = sampleQueries.map(sq =>
             `<option value="${sq.query}">${sq.label}</option>`
         ).join('');
 
         const queriesJson = JSON.stringify(sampleQueries.map(sq => sq.query));
         
-        return `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta content="width=device-width, initial-scale=1.0" name="viewport">
-            <title>${tableName} - Database Explorer</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
-            <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${tableName} - Data Browser</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class'
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+    <style>
+        :root {
+            --bg-main: #f9fafb;
+            --bg-surface: #ffffff;
+            --border-color: #e5e7eb;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+        }
+        .dark {
+            --bg-main: #000000;
+            --bg-surface: #18181b;
+            --border-color: #27272a;
+            --text-main: #ffffff;
+            --text-muted: #a1a1aa;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: var(--bg-main); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #888; border-radius: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #555; }
+        .fade-in { animation: fadeIn 0.15s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+        th.dragging { opacity: 0.4; background-color: #e5e7eb; border: 2px dashed #9ca3af; }
+        th.drag-over-left { border-left: 3px solid #2563eb; }
+        th.drag-over-right { border-right: 3px solid #2563eb; }
+        .sort-badge { font-size: 0.65rem; height: 16px; width: 16px; line-height: 16px; text-align: center; border-radius: 50%; background-color: #dbeafe; color: #1e40af; font-weight: 700; display: inline-block; margin-left: 2px; }
+        #loadingOverlay { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(2px); }
+        .dark #loadingOverlay { background: rgba(0, 0, 0, 0.85); }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen flex flex-col overflow-hidden transition-colors duration-300 dark:bg-black dark:text-zinc-100">
+
+    <div id="loadingOverlay" class="fixed inset-0 z-50 flex items-center justify-center hidden">
+        <div class="flex flex-col items-center">
+            <span class="material-symbols-outlined text-4xl animate-spin text-blue-600 mb-2">progress_activity</span>
+            <span class="text-sm font-medium text-gray-600 dark:text-gray-300" id="loadingText">Processing...</span>
+        </div>
+    </div>
+
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm z-20 dark:bg-zinc-900 dark:border-zinc-800">
+        <div class="flex items-center gap-4">
+            <div class="flex flex-col">
+                <h1 class="text-lg font-semibold text-gray-800 leading-tight dark:text-zinc-100">
+                    <span class="material-symbols-outlined text-xl align-middle mr-2">table_view</span>
+                    ${tableName}
+                </h1>
+                <p class="text-xs text-gray-500 dark:text-zinc-500">${totalRows} total records</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <div class="relative hidden md:block group">
+                <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg dark:text-zinc-500">search</span>
+                <input id="globalSearch" type="text" placeholder="Search all columns..." class="pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-100" />
+            </div>
+            <div class="h-6 w-px bg-gray-200 mx-1 dark:bg-zinc-800"></div>
+            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="toggleQueryPanel()">
+                <span class="material-symbols-outlined text-lg">terminal</span> Query
+            </button>
+            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="toggleColumnManager(event)">
+                <span class="material-symbols-outlined text-lg">view_column</span> Columns
+            </button>
+            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="exportData()">
+                <span class="material-symbols-outlined text-lg">download</span> Export
+            </button>
+            <button class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800" onclick="toggleTheme()">
+                <span class="material-symbols-outlined" id="themeIcon">dark_mode</span>
+            </button>
+        </div>
+    </header>
+
+    <div class="hidden bg-white border-b border-gray-200 shadow-inner flex-shrink-0 dark:bg-zinc-900 dark:border-zinc-800" id="queryPanel">
+        <div class="p-4 max-w-7xl mx-auto">
+            <div class="flex gap-4 mb-3">
+                <select id="sampleQueries" onchange="loadSampleQuery(this.value)" class="px-3 py-2 text-sm border border-gray-300 rounded-lg dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100">
+                    <option value="">-- Sample Queries --</option>
+                    ${sampleOptions}
+                </select>
+            </div>
+            <div class="relative">
+                <textarea id="queryInput" placeholder="Enter ${dbType === 'sqlite' ? 'SQL' : 'MongoDB'} query here..." class="w-full min-h-32 p-3 font-mono text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100" spellcheck="false"></textarea>
+                <div class="mt-2 flex gap-2">
+                    <button onclick="executeCustomQuery()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Execute</button>
+                    <button onclick="clearQuery()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600">Clear</button>
+                </div>
+            </div>
+            <div class="mt-2 text-xs text-gray-500 hidden dark:text-zinc-400" id="queryStatus"></div>
+        </div>
+    </div>
+
+    <div class="px-6 py-3 bg-white border-b border-gray-200 flex items-center justify-between flex-shrink-0 dark:bg-zinc-900 dark:border-zinc-800">
+        <div class="flex items-center gap-2">
+            <span class="text-sm font-medium text-gray-600 dark:text-zinc-400" id="totalRecords">${totalRows} Records</span>
+            <span id="filterBadge" class="hidden px-2 py-1 text-xs bg-blue-100 text-blue-600 rounded-full dark:bg-blue-900 dark:text-blue-200">Filtered</span>
+            <span class="text-xs text-gray-400 ml-2 italic hidden md:inline dark:text-zinc-500">Shift+Click to multi-sort</span>
+        </div>
+        <div class="flex items-center gap-2">
+            <button onclick="clearAllFilters()" class="px-3 py-1 text-xs text-gray-600 hover:text-gray-800 dark:text-zinc-400 dark:hover:text-zinc-200">
+                <span class="material-symbols-outlined text-sm align-middle">filter_alt_off</span> Clear Filters
+            </button>
+            <button onclick="resetView()" class="px-3 py-1 text-xs text-gray-600 hover:text-gray-800 dark:text-zinc-400 dark:hover:text-zinc-200">
+                <span class="material-symbols-outlined text-sm align-middle">refresh</span> Reset
+            </button>
+        </div>
+    </div>
+
+    <div class="flex-1 overflow-auto relative custom-scrollbar bg-white dark:bg-zinc-900">
+        <table class="w-full text-left border-collapse">
+            <thead class="bg-gray-50 sticky top-0 z-10 dark:bg-zinc-800" id="tableHeaderRow"></thead>
+            <tbody class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-zinc-700 dark:text-zinc-200" id="tableBody"></tbody>
+        </table>
+        <div class="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-zinc-500 hidden" id="emptyState">
+            <span class="material-symbols-outlined text-6xl mb-2">inbox</span>
+            <p class="text-lg font-medium text-gray-500 dark:text-zinc-400">No data to display</p>
+        </div>
+    </div>
+
+    <footer class="bg-white border-t border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0 text-sm dark:bg-zinc-900 dark:border-zinc-800">
+        <div class="flex items-center gap-2 text-gray-600 dark:text-zinc-400">
+            <span>Rows:</span>
+            <select id="rowsPerPage" onchange="changeRowsPerPage(this.value)" class="px-2 py-1 border border-gray-300 rounded dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100">
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="500">500</option>
+            </select>
+        </div>
+        <div class="flex items-center gap-4">
+            <span class="text-gray-600 dark:text-zinc-400" id="pageInfo">Page 1 of 1</span>
+            <div class="flex gap-1">
+                <button id="btnPrev" onclick="prevPage()" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Previous</button>
+                <button id="btnNext" onclick="nextPage()" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Next</button>
+            </div>
+        </div>
+    </footer>
+
+    <div class="hidden absolute z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-64 text-sm fade-in dark:bg-zinc-900 dark:border-zinc-800" id="columnManager" style="top: 130px; right: 24px;">
+        <div class="p-3 border-b border-gray-200 bg-gray-50 rounded-t-lg flex justify-between items-center dark:bg-zinc-800 dark:border-zinc-700">
+            <span class="font-semibold text-gray-700 dark:text-zinc-200">Manage Columns</span>
+            <button class="text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200" onclick="toggleColumnManager(event)">×</button>
+        </div>
+        <div class="p-2 max-h-64 overflow-y-auto custom-scrollbar" id="columnList"></div>
+    </div>
+
+    <div class="hidden absolute z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-80 text-sm fade-in dark:bg-zinc-900 dark:border-zinc-800" id="filterPopover">
+        <div class="p-3 border-b border-gray-200 bg-gray-50 rounded-t-lg flex justify-between items-center dark:bg-zinc-800 dark:border-zinc-700">
+            <span class="font-semibold text-gray-700 dark:text-zinc-200" id="filterTitle">Filter Column</span>
+            <button class="text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200" onclick="closeFilterPopover()">×</button>
+        </div>
+        <div class="p-4 space-y-3" id="filterContent"></div>
+        <div class="p-3 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end gap-2 dark:bg-zinc-800 dark:border-zinc-700">
+            <button class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 dark:text-zinc-400" onclick="clearCurrentFilter()">Clear</button>
+            <button class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700" onclick="applyCurrentFilter()">Apply</button>
+        </div>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        let allData = ${dataJson};
+        let filteredData = [];
+        let columns = ${columnsJson};
+        let visibleColumns = [...columns];
+        let sortConfig = [];
+        let draggedColumn = null;
+        let currentFilterCol = null;
+
+        let state = {
+            currentPage: 1,
+            rowsPerPage: ${pageSize},
+            columnFilters: {},
+            globalSearch: '',
+            darkMode: false
+        };
+
+        function initTheme() {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            setTheme(prefersDark);
+        }
+
+        function toggleTheme() {
+            setTheme(!state.darkMode);
+        }
+
+        function setTheme(isDark) {
+            state.darkMode = isDark;
+            const html = document.documentElement;
+            const themeIcon = document.getElementById('themeIcon');
+            if (isDark) {
+                html.classList.add('dark');
+                themeIcon.textContent = 'light_mode';
+            } else {
+                html.classList.remove('dark');
+                themeIcon.textContent = 'dark_mode';
+            }
+        }
+
+        function initTable() {
+            renderHeader();
+            renderBody();
+        }
+
+        function renderHeader() {
+            const tr = document.getElementById('tableHeaderRow');
+            tr.innerHTML = '<tr>' + visibleColumns.map((col) => {
+                const sortIndex = sortConfig.findIndex(s => s.col === col);
+                const sortDir = sortIndex >= 0 ? sortConfig[sortIndex].dir : null;
+                const sortBadge = sortIndex >= 0 ? \`<span class="sort-badge">\${sortIndex + 1}</span>\` : '';
+                const sortIcon = sortDir === 'asc' ? '↑' : sortDir === 'desc' ? '↓' : '';
+                const isFiltered = state.columnFilters[col];
+                return \`<th draggable="true" ondragstart="handleDragStart(event, '\${col}')" ondragover="handleDragOver(event, '\${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '\${col}')" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-700 group" onclick="handleSort(event, '\${col}')">
+                    <div class="flex items-center justify-between">
+                        <span>\${formatColumnName(col)} \${sortIcon} \${sortBadge}</span>
+                        <button onclick="openFilter(event, '\${col}')" class="ml-2 p-1 hover:bg-gray-200 rounded dark:hover:bg-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity \${isFiltered ? '!opacity-100 bg-blue-100 dark:bg-blue-900' : ''}">
+                            <span class="material-symbols-outlined text-sm">filter_alt</span>
+                        </button>
+                    </div>
+                </th>\`;
+            }).join('') + '</tr>';
+        }
+
+        function renderBody() {
+            const tbody = document.getElementById('tableBody');
+            const emptyState = document.getElementById('emptyState');
             
-            <style>
-                body { font-family: 'Roboto', sans-serif; }
-                h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-                .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
-                .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-                .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.2); border-radius: 4px; }
-                .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.4); }
-                .custom-scrollbar::-webkit-scrollbar-thumb:active { background: rgba(0, 0, 0, 0.5); }
-                .fade-in { animation: fadeIn 0.15s ease-in-out; }
-                @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
-                th.dragging { opacity: 0.4; background-color: #4b5563; border: 2px dashed #6b7280; }
-                th.drag-over-left { border-left: 3px solid #6b7280; }
-                th.drag-over-right { border-right: 3px solid #6b7280; }
-                .sort-badge { font-size: 0.65rem; height: 16px; width: 16px; line-height: 16px; text-align: center; border-radius: 50%; background-color: #4b5563; color: #d1d5db; font-weight: 700; display: inline-block; margin-left: 2px; }
-                
-                /* Loading Overlay */
-                #loadingOverlay {
-                    background: rgba(31, 41, 55, 0.8);
-                    backdrop-filter: blur(2px);
+            if (filteredData.length === 0) {
+                tbody.innerHTML = '';
+                emptyState.classList.remove('hidden');
+                return;
+            }
+            emptyState.classList.add('hidden');
+
+            const start = (state.currentPage - 1) * state.rowsPerPage;
+            const end = start + state.rowsPerPage;
+            const pageData = filteredData.slice(start, end);
+
+            tbody.innerHTML = pageData.map((row) => \`<tr class="hover:bg-gray-50 dark:hover:bg-zinc-800">\${visibleColumns.map(col => {
+                const value = row[col];
+                let content = value === null || value === undefined ? '<span class="text-gray-400 dark:text-zinc-500 italic">NULL</span>' : String(value);
+                let cls = '';
+                if (value === null || value === undefined) cls = 'text-gray-400 dark:text-zinc-500';
+                else if (typeof value === 'boolean') cls = value ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
+                else if (typeof value === 'number') cls = 'text-blue-600 dark:text-blue-400 font-mono';
+                return \`<td class="px-6 py-3 whitespace-nowrap \${cls}">\${content}</td>\`;
+            }).join('')}</tr>\`).join('');
+        }
+
+        function handleSort(event, col) {
+            const isShift = event.shiftKey;
+            const existingIndex = sortConfig.findIndex(s => s.col === col);
+            if (isShift) {
+                if (existingIndex >= 0) {
+                    if (sortConfig[existingIndex].dir === 'asc') sortConfig[existingIndex].dir = 'desc';
+                    else sortConfig.splice(existingIndex, 1);
+                } else sortConfig.push({ col, dir: 'asc' });
+            } else {
+                if (existingIndex >= 0) {
+                    if (sortConfig[existingIndex].dir === 'asc') sortConfig = [{ col, dir: 'desc' }];
+                    else sortConfig = [];
+                } else sortConfig = [{ col, dir: 'asc' }];
+            }
+            processData();
+        }
+
+        function processData() {
+            let temp = allData.filter(row => {
+                for (let col in state.columnFilters) {
+                    const filter = state.columnFilters[col];
+                    const value = String(row[col] || '').toLowerCase();
+                    const filterValue = filter.value.toLowerCase();
+                    if (filter.op === 'contains' && !value.includes(filterValue)) return false;
+                    if (filter.op === 'equals' && value !== filterValue) return false;
+                    if (filter.op === 'starts' && !value.startsWith(filterValue)) return false;
+                    if (filter.op === 'ends' && !value.endsWith(filterValue)) return false;
                 }
-            </style>
-        </head>
-
-        <body class="bg-gray-900 text-gray-100 h-screen flex flex-col overflow-hidden">
-
-            <div id="loadingOverlay" class="fixed inset-0 z-50 flex items-center justify-center hidden">
-                <div class="flex flex-col items-center">
-                    <span class="material-symbols-outlined text-4xl animate-spin text-gray-400 mb-2">progress_activity</span>
-                    <span class="text-sm font-medium text-gray-300" id="loadingText">Processing...</span>
-                </div>
-            </div>
-
-            <header class="bg-gray-800 border-b border-gray-700 px-6 py-3 flex items-center justify-between shadow-sm z-20">
-                <div class="flex items-center gap-3">
-                    <div>
-                        <h1 class="text-lg font-semibold text-gray-100 leading-tight">${tableName}</h1>
-                        <p class="text-xs text-gray-400" id="dbMeta">${dbType === 'sqlite' ? 'SQLite Database' : 'MongoDB Collection'}</p>
-                    </div>
-                </div>
-
-                <div class="flex items-center gap-3">
-                    <div class="relative">
-                        <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-lg">search</span>
-                        <input class="pl-10 pr-4 py-2 border border-gray-600 rounded-full text-sm focus:outline-none focus:border-gray-500 focus:ring-1 focus:ring-gray-500 w-64 bg-gray-700 text-gray-100 transition-all"
-                            id="globalSearch" placeholder="Search loaded data..." type="text">
-                    </div>
-                    <div class="h-6 w-px bg-gray-600 mx-1"></div>
-                    <button class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded-md hover:bg-gray-600 transition-colors"
-                        onclick="toggleQueryPanel()">
-                        <span class="material-symbols-outlined text-lg">terminal</span> <span>Query</span>
-                    </button>
-                    <button class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded-md hover:bg-gray-600 transition-colors"
-                        onclick="exportData()">
-                        <span class="material-symbols-outlined text-lg">download</span> <span>Export</span>
-                    </button>
-                </div>
-            </header>
-
-            <div class="hidden bg-gray-800 border-b border-gray-700 shadow-inner flex-shrink-0 transition-all duration-300 ease-in-out" id="queryPanel">
-                <div class="p-4 max-w-7xl mx-auto">
-                    <div class="flex gap-4 mb-3">
-                        <div class="flex bg-gray-700 p-1 rounded-lg">
-                            <button class="px-4 py-1.5 text-sm font-medium rounded-md shadow-sm bg-gray-600 text-gray-100 transition-all" id="modeSql" onclick="setQueryMode('sql')">SQL</button>
-                            <button class="px-4 py-1.5 text-sm font-medium rounded-md text-gray-400 hover:text-gray-100 transition-all flex items-center gap-1" id="modeAi" onclick="setQueryMode('ai')">
-                                <span class="material-symbols-outlined text-base">radio_button_unchecked</span> AI
-                            </button>
-                        </div>
-                        <div class="flex-1" id="sampleQueriesContainer">
-                            <select class="w-full text-sm border-gray-600 border rounded-md px-3 py-2 focus:ring-gray-500 focus:border-gray-500 bg-gray-700 text-gray-100" id="sampleQueries" onchange="loadSampleQuery(this.value)">
-                                <option value="">-- Load a Sample Query --</option>
-                                ${sampleOptions}
-                            </select>
-                        </div>
-                    </div>
-                    <div class="relative">
-                        <textarea class="w-full font-mono text-sm bg-gray-700 border border-gray-600 rounded-lg p-4 focus:ring-2 focus:ring-gray-500 focus:border-gray-500 outline-none transition-all resize-y text-gray-100"
-                            id="queryInput" placeholder="SELECT * FROM..." rows="4"></textarea>
-                        <div class="absolute bottom-3 right-3 flex gap-2">
-                            <button class="px-3 py-1.5 text-xs font-medium text-gray-400 bg-gray-700 border border-gray-600 rounded hover:bg-gray-600" onclick="clearQuery()">Clear</button>
-                            <button class="px-4 py-1.5 text-xs font-bold text-gray-100 bg-gray-600 rounded hover:bg-gray-500 shadow-sm flex items-center gap-1" onclick="executeCustomQuery()">
-                                <span class="material-symbols-outlined text-sm">play_arrow</span> Run
-                            </button>
-                        </div>
-                    </div>
-                    <div class="mt-2 text-xs text-gray-400 hidden" id="queryStatus"></div>
-                </div>
-            </div>
-
-            <div class="px-6 py-3 bg-gray-800 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
-                <div class="flex items-center gap-2">
-                    <span class="text-sm font-medium text-gray-300 bg-gray-700 px-2 py-1 rounded" id="totalRecords">${data.length} Records</span>
-                    <span class="hidden text-xs font-medium text-gray-400 bg-gray-700 px-2 py-1 rounded border border-gray-600 flex items-center gap-1 cursor-pointer hover:bg-gray-600"
-                        id="filterBadge" onclick="clearAllFilters()">
-                        Filters Active <span class="material-symbols-outlined text-xs">close</span>
-                    </span>
-                    <span class="text-xs text-gray-500 ml-2 italic hidden md:inline">Shift+Click to multi-sort. Drag headers to reorder.</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <button class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded hover:bg-gray-600 hover:text-slate-400 transition-colors"
-                        onclick="toggleColumnManager(event)">
-                        <span class="material-symbols-outlined text-lg">view_column</span> Columns
-                    </button>
-                    <button class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-gray-300 bg-gray-700 border border-gray-600 rounded hover:bg-gray-600 transition-colors"
-                        onclick="resetView()">
-                        <span class="material-symbols-outlined text-lg">restart_alt</span> Reset
-                    </button>
-                </div>
-            </div>
-
-            <div class="flex-1 overflow-auto relative custom-scrollbar bg-gray-800">
-                <table class="w-full text-left border-collapse">
-                    <thead class="bg-gray-700 sticky top-0 z-10 shadow-sm text-xs uppercase text-gray-400 font-semibold tracking-wider">
-                        <tr id="tableHeaderRow">
-                            ${columns.map((col, index) => `
-                                <th draggable="true"
-                                    class="px-6 py-3 border-b border-gray-600 group hover:bg-gray-600 transition-colors select-none cursor-pointer relative" 
-                                    onclick="handleSort(event, '${col}')"
-                                    ondragstart="handleDragStart(event, '${col}')" ondragover="handleDragOver(event, '${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '${col}')">
-                                    <div class="flex items-center justify-between">
-                                        <span class="flex items-center gap-1">
-                                            <span class="material-symbols-outlined text-gray-500 text-sm cursor-grab active:cursor-grabbing mr-1">drag_indicator</span>
-                                            ${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                        </span>
-                                        <div class="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onclick="openFilter(event, '${col}')" 
-                                                class="p-1 rounded hover:bg-gray-500 text-gray-500">
-                                                <span class="material-symbols-outlined text-base">filter_alt</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                </th>
-                            `).join('')}
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-700 text-sm text-gray-300" id="tableBody">
-                        ${data.map(row => `
-                            <tr class="hover:bg-gray-700 transition-colors group border-b border-gray-700 last:border-0">
-                                ${columns.map(col => {
-                                    const val = row[col];
-                                    let content = val;
-                                    let cls = '';
-                                    
-                                    if (val === null || val === undefined) {
-                                        content = '<span class="text-gray-500 italic">null</span>';
-                                    } else if (typeof val === 'boolean') {
-                                        content = val ?
-                                            `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">TRUE</span>` :
-                                            `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">FALSE</span>`;
-                                    } else if (typeof val === 'number') {
-                                        cls = 'font-mono text-gray-400';
-                                    } else if (typeof val === 'string' && val.includes('@') && col.toLowerCase().includes('email')) {
-                                        content = `<a href="mailto:${val}" class="text-gray-400 hover:text-gray-300">${val}</a>`;
-                                    } else if (typeof val === 'string' && val.length > 50) {
-                                        content = val.substring(0, 50) + '...';
-                                        cls = 'text-xs text-gray-500';
-                                    }
-
-                                    return `<td class="px-6 py-3 whitespace-nowrap ${cls}">${content}</td>`;
-                                }).join('')}
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>
-
-            <footer class="bg-gray-800 border-t border-gray-700 px-6 py-3 flex items-center justify-between flex-shrink-0 text-sm">
-                <div class="flex items-center gap-2 text-gray-400">
-                    <span>Rows:</span>
-                    <select class="border-gray-600 border rounded py-1 px-2 focus:ring-gray-500 focus:border-gray-500 bg-gray-700 text-gray-300 cursor-pointer"
-                        id="rowsPerPage" onchange="changeRowsPerPage(this.value)">
-                        <option value="10">10</option>
-                        <option selected value="20">20</option>
-                        <option value="50">50</option>
-                        <option value="100">100</option>
-                    </select>
-                </div>
-                <div class="flex items-center gap-4">
-                    <span class="text-gray-400" id="pageInfo">Page 1 of 1</span>
-                    <div class="flex gap-1">
-                        <button class="p-1 rounded hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-gray-400"
-                            id="btnPrev" onclick="prevPage()" disabled>
-                            <span class="material-symbols-outlined">chevron_left</span>
-                        </button>
-                        <button class="p-1 rounded hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-gray-400"
-                            id="btnNext" onclick="nextPage()" disabled>
-                            <span class="material-symbols-outlined">chevron_right</span>
-                        </button>
-                    </div>
-                </div>
-            </footer>
-
-            <div class="hidden absolute z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl w-64 text-sm fade-in"
-                id="columnManager" style="top: 130px; right: 24px;">
-                <div class="p-3 border-b border-gray-600 bg-gray-700 rounded-t-lg flex justify-between items-center">
-                    <span class="font-semibold text-gray-200">Manage Columns</span>
-                    <button class="text-gray-400 hover:text-gray-200" onclick="document.getElementById('columnManager').classList.add('hidden')"><span class="material-symbols-outlined text-lg">close</span></button>
-                </div>
-                <div class="p-2 max-h-64 overflow-y-auto custom-scrollbar" id="columnList"></div>
-            </div>
-
-            <div class="hidden absolute z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl w-80 text-sm fade-in" id="filterPopover">
-                <div class="p-3 border-b border-gray-600 bg-gray-700 rounded-t-lg flex justify-between items-center">
-                    <span class="font-semibold text-gray-200" id="filterTitle">Filter Column</span>
-                    <button class="text-gray-400 hover:text-gray-200" onclick="closeFilterPopover()"><span class="material-symbols-outlined text-lg">close</span></button>
-                </div>
-                <div class="p-4 space-y-3" id="filterContent"></div>
-                <div class="p-3 border-t border-gray-600 bg-gray-700 rounded-b-lg flex justify-end gap-2">
-                    <button class="px-3 py-1.5 text-gray-400 hover:bg-gray-600 rounded border border-gray-600 bg-gray-700" onclick="clearCurrentFilter()">Clear</button>
-                    <button class="px-3 py-1.5 text-gray-100 bg-gray-600 hover:bg-gray-500 rounded shadow-sm" onclick="applyCurrentFilter()">Apply</button>
-                </div>
-            </div>
-
-            <script>
-                const vscode = acquireVsCodeApi();
-                
-                // --- 1. Global State & Variables ---
-                let allData = ${JSON.stringify(data)};
-                let filteredData = [...allData];
-                let columns = ${JSON.stringify(columns)};
-                let visibleColumns = [...columns];
-                let columnStats = {};
-                let sortConfig = [];
-                let draggedColumn = null;
-
-                let state = {
-                    currentPage: 1,
-                    rowsPerPage: ${pageSize},
-                    columnFilters: {},
-                    globalSearch: ''
-                };
-
-                let totalRows = ${totalRows};
-
-                // --- 2. Utility Functions ---
-                function formatColumnName(col) { 
-                    return col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); 
+                if (state.globalSearch) {
+                    const searchLower = state.globalSearch.toLowerCase();
+                    const match = visibleColumns.some(col => String(row[col] || '').toLowerCase().includes(searchLower));
+                    if (!match) return false;
                 }
+                return true;
+            });
 
-                function getCellClass(value) {
-                    if (value === null || value === undefined) return 'null';
-                    if (typeof value === 'boolean') return 'boolean';
-                    if (typeof value === 'number') return 'number';
-                    if (typeof value === 'string') return 'string';
-                    return '';
-                }
-
-                function formatCellValue(value) {
-                    if (value === null || value === undefined) return 'null';
-                    if (typeof value === 'string') return value;
-                    if (typeof value === 'number') return value.toLocaleString();
-                    if (typeof value === 'boolean') return value.toString();
-                    if (typeof value === 'object') {
-                        try {
-                            return JSON.stringify(value, null, 2);
-                        } catch {
-                            return '[Object]';
-                        }
+            if (sortConfig.length > 0) {
+                temp.sort((a, b) => {
+                    for (let s of sortConfig) {
+                        const aVal = a[s.col]; const bVal = b[s.col];
+                        if (aVal < bVal) return s.dir === 'asc' ? -1 : 1;
+                        if (aVal > bVal) return s.dir === 'asc' ? 1 : -1;
                     }
-                    return String(value);
-                }
-
-                // --- 3. Smart Column Analysis (Enums) ---
-                function analyzeColumns() {
-                    columnStats = {};
-                    const palette = [
-                        { bg: 'bg-slate-100', text: 'text-slate-800' }, { bg: 'bg-green-100', text: 'text-green-800' },
-                        { bg: 'bg-purple-100', text: 'text-purple-800' }, { bg: 'bg-yellow-100', text: 'text-yellow-800' },
-                        { bg: 'bg-indigo-100', text: 'text-indigo-800' }, { bg: 'bg-pink-100', text: 'text-pink-800' },
-                        { bg: 'bg-gray-100', text: 'text-gray-800' }, { bg: 'bg-red-100', text: 'text-red-800' },
-                        { bg: 'bg-orange-100', text: 'text-orange-800' }
-                    ];
-
-                    if(allData.length === 0) return;
-
-                    columns.forEach(col => {
-                        const sampleVal = allData[0][col];
-                        const type = typeof sampleVal;
-                        
-                        // Identify Enums: Low cardinality strings
-                        if (type === 'string' && !col.toLowerCase().includes('email') && !col.toLowerCase().includes('id') && !col.toLowerCase().includes('name')) {
-                            const uniqueValues = new Set(allData.map(d => d[col]));
-                            if (uniqueValues.size < 20 && uniqueValues.size > 1 && allData.length > 20) {
-                                const valueColorMap = {};
-                                let colorIdx = 0;
-                                Array.from(uniqueValues).sort().forEach(val => {
-                                    valueColorMap[val] = palette[colorIdx % palette.length];
-                                    colorIdx++;
-                                });
-                                columnStats[col] = { isEnum: true, options: Array.from(uniqueValues).sort(), colorMap: valueColorMap };
-                                return;
-                            }
-                        }
-                        columnStats[col] = { isEnum: false, options: [] };
-                    });
-                }
-
-                // --- 4. Rendering Logic ---
-                function initTable() {
-                    renderHeader();
-                    renderBody();
-                }
-
-                function renderHeader() {
-                    const tr = document.getElementById('tableHeaderRow');
-                    tr.innerHTML = visibleColumns.map((col, index) => {
-                        const sortIndex = sortConfig.findIndex(s => s.col === col);
-                        const isSorted = sortIndex !== -1;
-                        const sortDir = isSorted ? sortConfig[sortIndex].dir : null;
-                        const isFiltered = state.columnFilters[col];
-
-                        return \`
-                        <th draggable="true"
-                            class="px-6 py-3 border-b border-gray-600 group hover:bg-gray-600 transition-colors select-none cursor-pointer relative" 
-                            onclick="handleSort(event, '\${col}')"
-                            ondragstart="handleDragStart(event, '\${col}')" ondragover="handleDragOver(event, '\${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '\${col}')">
-                            <div class="flex items-center justify-between">
-                                <span class="flex items-center gap-1 \${isSorted ? 'text-gray-100 font-bold' : ''}">
-                                    <span class="material-symbols-outlined text-gray-500 text-sm cursor-grab active:cursor-grabbing mr-1">drag_indicator</span>
-                                    \${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                    \${isSorted ? \`<span class="material-symbols-outlined text-sm font-bold">\${sortDir === 'asc' ? 'arrow_upward' : 'arrow_downward'}</span>\` : ''}
-                                    \${(isSorted && sortConfig.length > 1) ? \`<span class="sort-badge">\${sortIndex + 1}</span>\` : ''}
-                                </span>
-                                <div class="flex items-center opacity-0 group-hover:opacity-100 \${isFiltered ? 'opacity-100' : ''} transition-opacity">
-                                    <button onclick="openFilter(event, '\${col}')" 
-                                        class="p-1 rounded hover:bg-gray-500 \${isFiltered ? 'text-gray-100 bg-gray-600' : 'text-gray-500'}">
-                                        <span class="material-symbols-outlined text-base">filter_alt</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </th>
-                    \`;
-                    }).join('');
-                }
-
-                function renderBody() {
-                    const tbody = document.getElementById('tableBody');
-                    
-                    if (filteredData.length === 0) {
-                        if(allData.length > 0) {
-                             tbody.innerHTML = \`<tr><td colspan="\${visibleColumns.length}" class="px-6 py-8 text-center text-gray-400">No records found matching your filters.</td></tr>\`;
-                        } else {
-                             tbody.innerHTML = ''; // Show empty state
-                        }
-                        return;
-                    }
-
-                    const start = (state.currentPage - 1) * state.rowsPerPage;
-                    const end = start + state.rowsPerPage;
-                    const pageData = filteredData.slice(start, end);
-
-                    tbody.innerHTML = pageData.map((row) => \`
-                        <tr class="hover:bg-slate-50/50 transition-colors group border-b border-gray-100 last:border-0">
-                            \${visibleColumns.map(col => {
-                                const val = row[col];
-                                let content = val;
-                                let cls = '';
-                                const stats = columnStats[col];
-
-                                if (val === null || val === undefined) {
-                                    content = '<span class="text-gray-300 italic">null</span>';
-                                } else if (stats && stats.isEnum) {
-                                    const color = stats.colorMap[val] || { bg: 'bg-gray-100', text: 'text-gray-800' };
-                                    content = \`<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium \${color.bg} \${color.text}">\${val}</span>\`;
-                                } else if (typeof val === 'boolean' || (typeof val === 'number' && (val === 0 || val === 1) && col.toLowerCase().includes('is_'))) {
-                                    const boolVal = typeof val === 'boolean' ? val : val === 1;
-                                    content = boolVal ?
-                                        \`<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">TRUE</span>\` :
-                                        \`<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">FALSE</span>\`;
-                                } else if (typeof val === 'number') {
-                                    cls = 'font-mono text-gray-600';
-                                } else if (typeof val === 'string' && val.includes('@') && col.toLowerCase().includes('email')) {
-                                    content = \`<a href="mailto:\${val}" class="text-slate-600 hover:underline">\${val}</a>\`;
-                                } else if (typeof val === 'string' && val.length > 50) {
-                                    content = val.substring(0, 50) + '...';
-                                    cls = 'text-xs text-gray-500';
-                                }
-
-                                return \`<td class="px-6 py-3 whitespace-nowrap \${cls}">\${content}</td>\`;
-                            }).join('')}
-                        </tr>
-                    \`).join('');
-                }
-
-                // --- 5. Filtering & Sorting (Client Side) ---
-                function handleSort(event, col) {
-                    const isShift = event.shiftKey;
-                    const existingIndex = sortConfig.findIndex(s => s.col === col);
-
-                    if (isShift) {
-                        if (existingIndex !== -1) {
-                            if (sortConfig[existingIndex].dir === 'asc') sortConfig[existingIndex].dir = 'desc';
-                            else sortConfig.splice(existingIndex, 1);
-                        } else {
-                            sortConfig.push({ col: col, dir: 'asc' });
-                        }
-                    } else {
-                        if (existingIndex !== -1 && sortConfig.length === 1) {
-                            // Cycle through: asc -> desc -> remove
-                            if (sortConfig[0].dir === 'asc') {
-                                sortConfig[0].dir = 'desc';
-                            } else {
-                                sortConfig = []; // Remove sort on third click
-                            }
-                        } else {
-                            sortConfig = [{ col: col, dir: 'asc' }];
-                        }
-                    }
-                    processData();
-                }
-
-                function processData() {
-                    // 1. Filter
-                    let temp = allData.filter(row => {
-                        // Global search
-                        if (state.globalSearch) {
-                            const term = state.globalSearch.toLowerCase();
-                            const matches = Object.values(row).some(val => String(val).toLowerCase().includes(term));
-                            if (!matches) return false;
-                        }
-
-                        // Column filters
-                        for (const [col, filter] of Object.entries(state.columnFilters)) {
-                            let val = row[col];
-                            const fVal = filter.value;
-                            const fVal2 = filter.value2;
-                            const op = filter.op;
-
-                            if (val === null || val === undefined) return false;
-
-                            // Number logic
-                            if (typeof val === 'number') {
-                                const nVal = Number(val);
-                                const nFVal = Number(fVal);
-                                const nFVal2 = Number(fVal2);
-                                if (op === '=') { if (nVal !== nFVal) return false; }
-                                else if (op === '!=') { if (nVal === nFVal) return false; }
-                                else if (op === '>') { if (nVal <= nFVal) return false; }
-                                else if (op === '<') { if (nVal >= nFVal) return false; }
-                                else if (op === '>=') { if (nVal < nFVal) return false; }
-                                else if (op === '<=') { if (nVal > nFVal) return false; }
-                                else if (op === 'range') { if (nVal < nFVal || nVal > nFVal2) return false; }
-                            }
-                            // Date logic (String based)
-                            else if (!isNaN(Date.parse(val)) && typeof val === 'string' && val.includes('-')) {
-                                if (op === '=') { if (val !== fVal) return false; }
-                                else if (op === '!=') { if (val === fVal) return false; }
-                                else if (op === '>') { if (val <= fVal) return false; }
-                                else if (op === '<') { if (val >= fVal) return false; }
-                                else if (op === '>=') { if (val < fVal) return false; }
-                                else if (op === '<=') { if (val > fVal) return false; }
-                                else if (op === 'range') { if (val < fVal || val > fVal2) return false; }
-                            }
-                            // String/Bool Logic
-                            else {
-                                const sVal = String(val).toLowerCase();
-                                const sFVal = String(fVal).toLowerCase();
-
-                                if (op === 'contains') { if (!sVal.includes(sFVal)) return false; }
-                                else if (op === 'not_contains') { if (sVal.includes(sFVal)) return false; }
-                                else if (op === '=') { if (sVal !== sFVal) return false; }
-                                else if (op === '!=') { if (sVal === sFVal) return false; }
-                                else if (op === 'starts_with') { if (!sVal.startsWith(sFVal)) return false; }
-                                else if (op === 'ends_with') { if (!sVal.endsWith(sFVal)) return false; }
-                                else if (op === 'regex') {
-                                    try {
-                                        const regex = new RegExp(filter.value, 'i');
-                                        if (!regex.test(String(val))) return false;
-                                    } catch (e) { return true; } // Ignore invalid regex
-                                }
-                            }
-                        }
-                        return true;
-                    });
-
-                    // 2. Sort
-                    if (sortConfig.length > 0) {
-                        temp.sort((a, b) => {
-                            for (const sort of sortConfig) {
-                                const valA = a[sort.col];
-                                const valB = b[sort.col];
-                                if (valA < valB) return sort.dir === 'asc' ? -1 : 1;
-                                if (valA > valB) return sort.dir === 'asc' ? 1 : -1;
-                            }
-                            return 0;
-                        });
-                    }
-
-                    filteredData = temp;
-                    state.currentPage = 1;
-                    updateUI();
-                }
-
-                // --- 6. UI Helpers ---
-                let currentFilterCol = null;
-
-                function openFilter(event, col) {
-                    event.stopPropagation();
-                    currentFilterCol = col;
-                    const btn = event.currentTarget;
-                    const rect = btn.getBoundingClientRect();
-                    const popover = document.getElementById('filterPopover');
-                    
-                    let left = rect.left;
-                    if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
-                    popover.style.top = (rect.bottom + 5) + 'px';
-                    popover.style.left = left + 'px';
-
-                    renderFilterUI(col);
-                    popover.classList.remove('hidden');
-
-                    const input = document.getElementById('filterVal');
-                    if (input) setTimeout(() => input.focus(), 50);
-                }
-
-                function renderFilterUI(col) {
-                    const sampleVal = allData.length > 0 ? allData[0][col] : null;
-                    const type = typeof sampleVal;
-                    const container = document.getElementById('filterContent');
-                    const current = state.columnFilters[col] || { op: '', value: '', value2: '' };
-                    const isEnum = columnStats[col] && columnStats[col].isEnum;
-
-                    document.getElementById('filterTitle').textContent = \`Filter \${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}\`;
-
-                    let html = '';
-                    let datalist = '';
-
-                    // Autocomplete Datalist
-                    const uniqueVals = Array.from(new Set(allData.map(d => d[col]))).slice(0, 50);
-                    datalist = \`<datalist id="autoComplete_\${col}">\${uniqueVals.map(v => \`<option value="\${v}">\`).join('')}</datalist>\`;
-
-                    if (type === 'number') {
-                        html = \`
-                            <select id="filterOp" class="w-full mb-2 border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 focus:ring-gray-500 focus:border-gray-500" onchange="toggleRangeInput(this.value)">
-                                <option value="=" \${current.op === '=' ? 'selected' : ''}>Equals (=)</option>
-                                <option value="!=" \${current.op === '!=' ? 'selected' : ''}>Not Equals (!=)</option>
-                                <option value=">" \${current.op === '>' ? 'selected' : ''}>Greater Than (>)</option>
-                                <option value="<" \${current.op === '<' ? 'selected' : ''}>Less Than (<)</option>
-                                <option value=">=" \${current.op === '>=' ? 'selected' : ''}>Greater or Equal (>=)</option>
-                                <option value="<=" \${current.op === '<=' ? 'selected' : ''}>Less or Equal (<=)</option>
-                                <option value="range" \${current.op === 'range' ? 'selected' : ''}>Range (Between)</option>
-                            </select>
-                            <input type="number" id="filterVal" value="\${current.value}" class="w-full border rounded p-2 text-sm mb-2 bg-gray-700 border-gray-600 text-gray-100" placeholder="Value...">
-                            <input type="number" id="filterVal2" value="\${current.value2}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 \${current.op === 'range' ? '' : 'hidden'}" placeholder="To Value...">
-                        \`;
-                    } else if (type === 'boolean') {
-                        html = \`
-                            <select id="filterOp" class="hidden"><option value="=">Equals</option></select>
-                            <select id="filterVal" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100">
-                                <option value="true" \${String(current.value) === 'true' ? 'selected' : ''}>TRUE</option>
-                                <option value="false" \${String(current.value) === 'false' ? 'selected' : ''}>FALSE</option>
-                            </select>
-                        \`;
-                    } else {
-                        // String / Date logic
-                        const isDate = !isNaN(Date.parse(sampleVal)) && String(sampleVal).includes('-');
-
-                        if (isDate) {
-                            html = \`
-                                <select id="filterOp" class="w-full mb-2 border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100" onchange="toggleRangeInput(this.value)">
-                                    <option value="=" \${current.op === '=' ? 'selected' : ''}>Equals Date</option>
-                                    <option value="!=" \${current.op === '!=' ? 'selected' : ''}>Not Date</option>
-                                    <option value=">" \${current.op === '>' ? 'selected' : ''}>After</option>
-                                    <option value="<" \${current.op === '<' ? 'selected' : ''}>Before</option>
-                                    <option value=">=" \${current.op === '>=' ? 'selected' : ''}>On or After</option>
-                                    <option value="<=" \${current.op === '<=' ? 'selected' : ''}>On or Before</option>
-                                    <option value="range" \${current.op === 'range' ? 'selected' : ''}>Between Dates</option>
-                                </select>
-                                <input type="date" id="filterVal" value="\${current.value}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 mb-2">
-                                <input type="date" id="filterVal2" value="\${current.value2}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100 \${current.op === 'range' ? '' : 'hidden'}">
-                            \`;
-                        } else {
-                            html = \`
-                                <select id="filterOp" class="w-full mb-2 border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100">
-                                    <option value="contains" \${current.op === 'contains' ? 'selected' : ''}>Contains</option>
-                                    <option value="not_contains" \${current.op === 'not_contains' ? 'selected' : ''}>Does Not Contain</option>
-                                    <option value="=" \${current.op === '=' ? 'selected' : ''}>Equals</option>
-                                    <option value="!=" \${current.op === '!=' ? 'selected' : ''}>Not Equals</option>
-                                    <option value="starts_with" \${current.op === 'starts_with' ? 'selected' : ''}>Starts With</option>
-                                    <option value="ends_with" \${current.op === 'ends_with' ? 'selected' : ''}>Ends With</option>
-                                    <option value="regex" \${current.op === 'regex' ? 'selected' : ''}>Regex Match</option>
-                                </select>
-                                \${datalist}
-                                <input type="text" id="filterVal" list="autoComplete_\${col}" value="\${current.value}" class="w-full border rounded p-2 text-sm bg-gray-700 border-gray-600 text-gray-100" placeholder="Value..." autofocus>
-                                <div class="text-xs text-gray-400 mt-1 italic \${current.op === 'regex' ? '' : 'hidden'}" id="regexHint">Example: ^[A-Z].*</div>
-                            \`;
-                        }
-                    }
-                    container.innerHTML = html;
-                }
-
-                function toggleRangeInput(op) {
-                    const v2 = document.getElementById('filterVal2');
-                    if (v2) {
-                        if (op === 'range') v2.classList.remove('hidden');
-                        else v2.classList.add('hidden');
-                    }
-                    const hint = document.getElementById('regexHint');
-                    if (hint) {
-                        const opSelect = document.getElementById('filterOp');
-                        if (opSelect && opSelect.value === 'regex') hint.classList.remove('hidden');
-                        else hint.classList.add('hidden');
-                    }
-                }
-
-                function applyCurrentFilter() {
-                    const op = document.getElementById('filterOp').value;
-                    const val = document.getElementById('filterVal').value;
-                    const val2Element = document.getElementById('filterVal2');
-                    const val2 = val2Element ? val2Element.value : '';
-
-                    if (val === '') {
-                        delete state.columnFilters[currentFilterCol];
-                    } else {
-                        state.columnFilters[currentFilterCol] = { op, value: val, value2: val2 };
-                    }
-                    closeFilterPopover();
-                    processData();
-                }
-
-                function clearCurrentFilter() {
-                    delete state.columnFilters[currentFilterCol];
-                    closeFilterPopover();
-                    processData();
-                }
-                
-                function closeFilterPopover() { document.getElementById('filterPopover').classList.add('hidden'); }
-                function clearAllFilters() { state.columnFilters = {}; document.getElementById('globalSearch').value = ''; state.globalSearch = ''; processData(); }
-
-                // Drag & Drop Cols
-                function handleDragStart(e, col) { draggedColumn = col; e.target.classList.add('dragging'); }
-                function handleDragOver(e, col) {
-                    e.preventDefault();
-                    if (draggedColumn === col) return;
-                    const th = e.currentTarget;
-                    const rect = th.getBoundingClientRect();
-                    th.classList.remove('drag-over-left', 'drag-over-right');
-                    if (e.clientX < rect.left + rect.width / 2) th.classList.add('drag-over-left'); else th.classList.add('drag-over-right');
-                }
-                function handleDragLeave(e) { e.currentTarget.classList.remove('drag-over-left', 'drag-over-right'); }
-                function handleDrop(e, targetCol) {
-                    e.preventDefault();
-                    e.currentTarget.classList.remove('drag-over-left', 'drag-over-right');
-                    document.querySelectorAll('th').forEach(th => th.classList.remove('dragging'));
-                    if (draggedColumn && draggedColumn !== targetCol) {
-                        const oldIdx = visibleColumns.indexOf(draggedColumn);
-                        visibleColumns.splice(oldIdx, 1);
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const newIdx = (e.clientX < rect.left + rect.width / 2) ? visibleColumns.indexOf(targetCol) : visibleColumns.indexOf(targetCol) + 1;
-                        visibleColumns.splice(newIdx, 0, draggedColumn);
-                        initTable();
-                    }
-                }
-
-                // Standard UI Utils
-                function updateUI() { renderHeader(); renderBody(); renderPagination(); updateTotalCount(); 
-                     const badge = document.getElementById('filterBadge');
-                     Object.keys(state.columnFilters).length > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden');
-                }
-                function updateTotalCount() { document.getElementById('totalRecords').textContent = \`\${filteredData.length} Records\`; }
-                function renderPagination() {
-                    const totalPages = Math.ceil(filteredData.length / state.rowsPerPage) || 1;
-                    document.getElementById('pageInfo').textContent = \`Page \${state.currentPage} of \${totalPages}\`;
-                    document.getElementById('btnPrev').disabled = state.currentPage === 1;
-                    document.getElementById('btnNext').disabled = state.currentPage === totalPages;
-                }
-                function nextPage() { if (state.currentPage < Math.ceil(filteredData.length / state.rowsPerPage)) { state.currentPage++; updateUI(); } }
-                function prevPage() { if (state.currentPage > 1) { state.currentPage--; updateUI(); } }
-                function changeRowsPerPage(val) { state.rowsPerPage = parseInt(val); state.currentPage = 1; updateUI(); }
-                
-                function toggleQueryPanel() { document.getElementById('queryPanel').classList.toggle('hidden'); }
-                function toggleColumnManager() { 
-                    const el = document.getElementById('columnManager');
-                    el.classList.toggle('hidden');
-                    if(!el.classList.contains('hidden')) {
-                         document.getElementById('columnList').innerHTML = columns.map(col => \`
-                            <label class="flex items-center space-x-2 p-1.5 hover:bg-gray-700 rounded cursor-pointer">
-                                <input type="checkbox" onchange="toggleColumn('\${col}')" \${visibleColumns.includes(col) ? 'checked' : ''} class="rounded text-slate-600 bg-gray-700 border-gray-600">
-                                <span class="text-gray-300">\${col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
-                            </label>
-                        \`).join('');
-                    }
-                }
-                function resetView() { visibleColumns = [...columns]; clearAllFilters(); sortConfig = []; initTable(); }
-                function exportData() {
-                    if(filteredData.length === 0) { alert("No data to export"); return; }
-                    const header = visibleColumns.join(",");
-                    const rows = filteredData.map(row => visibleColumns.map(col => \`"\${String(row[col]||'').replace(/"/g, '""')}"\`).join(",")).join("\\n");
-                    const blob = new Blob([header + "\\n" + rows], { type: "text/csv" });
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.setAttribute("href", url);
-                    a.setAttribute("download", "export.csv");
-                    a.click();
-                }
-
-                // Global Search
-                document.getElementById('globalSearch').addEventListener('input', (e) => { state.globalSearch = e.target.value; processData(); });
-
-                // Query Panel Functions
-                function setQueryMode(mode) {
-                    const sqlBtn = document.getElementById('modeSql');
-                    const aiBtn = document.getElementById('modeAi');
-                    const input = document.getElementById('queryInput');
-
-                    if (mode === 'sql') {
-                        sqlBtn.classList.add('bg-white', 'text-gray-900', 'shadow-sm');
-                        sqlBtn.classList.remove('text-gray-500');
-                        aiBtn.classList.remove('bg-white', 'text-gray-900', 'shadow-sm');
-                        aiBtn.classList.add('text-gray-500');
-                        input.placeholder = "SELECT * FROM...";
-                        document.getElementById('sampleQueriesContainer').classList.remove('hidden');
-                    } else {
-                        aiBtn.classList.add('bg-white', 'text-gray-900', 'shadow-sm');
-                        aiBtn.classList.remove('text-gray-500');
-                        sqlBtn.classList.remove('bg-white', 'text-gray-900', 'shadow-sm');
-                        sqlBtn.classList.add('text-gray-500');
-                        input.placeholder = "Ask in plain English (e.g. 'Show me all active records')...";
-                        document.getElementById('sampleQueriesContainer').classList.add('hidden');
-                    }
-                }
-
-                function loadSampleQuery(val) {
-                    if (val) {
-                        document.getElementById('queryInput').value = val;
-                    }
-                }
-
-                function clearQuery() {
-                    document.getElementById('queryInput').value = '';
-                    document.getElementById('queryStatus').classList.add('hidden');
-                }
-
-                function executeCustomQuery() {
-                    const sql = document.getElementById('queryInput').value;
-                    if(!sql.trim()) return;
-                    
-                    const status = document.getElementById('queryStatus');
-                    status.innerHTML = \`<span class="inline-flex items-center gap-1 text-gray-500"><span class="material-symbols-outlined text-sm animate-spin">refresh</span> Executing...</span>\`;
-                    status.classList.remove('hidden');
-
-                    vscode.postMessage({
-                        command: 'executeQuery',
-                        query: sql
-                    });
-                }
-
-                // Close popovers on click outside
-                document.addEventListener('click', (e) => {
-                    if (!document.getElementById('filterPopover').classList.contains('hidden') && !e.target.closest('#filterPopover') && !e.target.closest('th button')) {
-                        document.getElementById('filterPopover').classList.add('hidden');
-                    }
-                    if (!document.getElementById('columnManager').classList.contains('hidden') && !e.target.closest('#columnManager') && !e.target.closest('button[onclick*="toggleColumnManager"]')) {
-                        document.getElementById('columnManager').classList.add('hidden');
-                    }
+                    return 0;
                 });
+            }
+            filteredData = temp;
+            state.currentPage = 1;
+            updateUI();
+        }
 
-                // Message handling from extension
-                window.addEventListener('message', event => {
-                    const message = event.data;
-                    if (message.command === 'pageData') {
-                        allData = Array.isArray(message.data) ? message.data : [];
-                        filteredData = [...allData];
-                        if (typeof message.totalRows === 'number') {
-                            totalRows = message.totalRows;
-                        }
-                        const nextPage = Number(message.page);
-                        if (Number.isFinite(nextPage) && nextPage > 0) {
-                            state.currentPage = Math.floor(nextPage);
-                        }
-                        const nextPageSize = Number(message.pageSize);
-                        if (Number.isFinite(nextPageSize) && nextPageSize > 0) {
-                            state.rowsPerPage = Math.floor(nextPageSize);
-                        }
-                        analyzeColumns();
-                        processData();
-                    } else if (message.command === 'pageError') {
-                        console.error(message.error || 'Failed to load page');
-                    } else if (message.command === 'queryResult') {
-                        const status = document.getElementById('queryStatus');
-                        status.innerHTML = \`<span class="inline-flex items-center gap-1 text-green-600"><span class="material-symbols-outlined text-sm">check_circle</span> Query returned \${message.rowCount} rows.</span>\`;
-                        
-                        // Update table with query results
-                        allData = Array.isArray(message.data) ? message.data : [];
-                        filteredData = [...allData];
-                        totalRows = message.rowCount || allData.length;
-                        columns = allData.length > 0 ? Object.keys(allData[0]) : [];
-                        visibleColumns = [...columns];
-                        
-                        analyzeColumns();
-                        initTable();
-                        updateTotalCount();
-                        renderPagination();
-                    } else if (message.command === 'queryError') {
-                        const status = document.getElementById('queryStatus');
-                        status.innerHTML = \`<span class="text-red-600 font-medium">Error: \${message.error}</span>\`;
-                    } else if (message.command === 'aiQueryResult') {
-                        document.getElementById('queryInput').value = message.sqlQuery;
-                        setQueryMode('sql');
-                        const status = document.getElementById('queryStatus');
-                        status.innerHTML = \`<span class="inline-flex items-center gap-1 text-green-600"><span class="material-symbols-outlined text-sm">check_circle</span> SQL query generated.</span>\`;
-                    } else if (message.command === 'aiQueryError') {
-                        const status = document.getElementById('queryStatus');
-                        status.innerHTML = \`<span class="text-red-600 font-medium">AI Error: \${message.error}</span>\`;
-                    }
-                });
+        function updateUI() {
+            renderHeader();
+            renderBody();
+            renderPagination();
+            updateTotalCount();
+            const badge = document.getElementById('filterBadge');
+            if (Object.keys(state.columnFilters).length > 0 || state.globalSearch) {
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
 
-                // Initialize
-                analyzeColumns();
+        function updateTotalCount() {
+            document.getElementById('totalRecords').textContent = \`\${filteredData.length} Records\`;
+        }
+
+        function renderPagination() {
+            const totalPages = Math.ceil(filteredData.length / state.rowsPerPage) || 1;
+            document.getElementById('pageInfo').textContent = \`Page \${state.currentPage} of \${totalPages}\`;
+            document.getElementById('btnPrev').disabled = state.currentPage === 1;
+            document.getElementById('btnNext').disabled = state.currentPage === totalPages;
+        }
+
+        function nextPage() {
+            if (state.currentPage < Math.ceil(filteredData.length / state.rowsPerPage)) {
+                state.currentPage++;
+                updateUI();
+            }
+        }
+
+        function prevPage() {
+            if (state.currentPage > 1) {
+                state.currentPage--;
+                updateUI();
+            }
+        }
+
+        function changeRowsPerPage(val) {
+            state.rowsPerPage = parseInt(val);
+            state.currentPage = 1;
+            updateUI();
+        }
+
+        function formatColumnName(col) {
+            return col.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
+        }
+
+        function openFilter(event, col) {
+            event.stopPropagation();
+            currentFilterCol = col;
+            const btn = event.currentTarget;
+            const rect = btn.getBoundingClientRect();
+            const popover = document.getElementById('filterPopover');
+            let left = rect.left;
+            if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
+            popover.style.top = (rect.bottom + 5) + 'px';
+            popover.style.left = left + 'px';
+
+            document.getElementById('filterTitle').textContent = \`Filter \${formatColumnName(col)}\`;
+            const current = state.columnFilters[col] || { op: 'contains', value: '' };
+
+            const html = \`
+                <select id="filterOp" class="w-full border border-gray-300 rounded-lg p-2 text-sm dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100">
+                    <option value="contains" \${current.op === 'contains' ? 'selected' : ''}>Contains</option>
+                    <option value="equals" \${current.op === 'equals' ? 'selected' : ''}>Equals</option>
+                    <option value="starts" \${current.op === 'starts' ? 'selected' : ''}>Starts With</option>
+                    <option value="ends" \${current.op === 'ends' ? 'selected' : ''}>Ends With</option>
+                </select>
+                <input type="text" id="filterVal" value="\${current.value}" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100" placeholder="Value..." autofocus>
+            \`;
+            document.getElementById('filterContent').innerHTML = html;
+            popover.classList.remove('hidden');
+            setTimeout(() => document.getElementById('filterVal').focus(), 50);
+        }
+
+        function applyCurrentFilter() {
+            const op = document.getElementById('filterOp').value;
+            const val = document.getElementById('filterVal').value;
+            if (val === '') delete state.columnFilters[currentFilterCol];
+            else state.columnFilters[currentFilterCol] = { op, value: val };
+            closeFilterPopover();
+            processData();
+        }
+
+        function clearCurrentFilter() {
+            delete state.columnFilters[currentFilterCol];
+            closeFilterPopover();
+            processData();
+        }
+
+        function closeFilterPopover() {
+            document.getElementById('filterPopover').classList.add('hidden');
+        }
+
+        function clearAllFilters() {
+            state.columnFilters = {};
+            document.getElementById('globalSearch').value = '';
+            state.globalSearch = '';
+            processData();
+        }
+
+        function toggleColumnManager(e) {
+            e.stopPropagation();
+            const el = document.getElementById('columnManager');
+            el.classList.toggle('hidden');
+            if (!el.classList.contains('hidden')) {
+                const list = document.getElementById('columnList');
+                list.innerHTML = columns.map(col => \`
+                    <label class="flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer dark:hover:bg-zinc-800">
+                        <input type="checkbox" \${visibleColumns.includes(col) ? 'checked' : ''} onchange="toggleColumn('\${col}')" class="rounded">
+                        <span class="text-sm dark:text-zinc-200">\${formatColumnName(col)}</span>
+                    </label>
+                \`).join('');
+            }
+        }
+
+        function toggleColumn(col) {
+            if (visibleColumns.includes(col)) {
+                visibleColumns = visibleColumns.filter(c => c !== col);
+            } else {
+                visibleColumns.push(col);
+                visibleColumns.sort((a, b) => columns.indexOf(a) - columns.indexOf(b));
+            }
+            initTable();
+        }
+
+        function resetView() {
+            visibleColumns = [...columns];
+            clearAllFilters();
+            sortConfig = [];
+            initTable();
+        }
+
+        function handleDragStart(e, col) {
+            draggedColumn = col;
+            e.target.closest('th').classList.add('dragging');
+        }
+
+        function handleDragOver(e, col) {
+            e.preventDefault();
+            if (draggedColumn === col) return;
+            const th = e.currentTarget;
+            const rect = th.getBoundingClientRect();
+            th.classList.remove('drag-over-left', 'drag-over-right');
+            if (e.clientX < rect.left + rect.width / 2) th.classList.add('drag-over-left');
+            else th.classList.add('drag-over-right');
+        }
+
+        function handleDragLeave(e) {
+            e.currentTarget.classList.remove('drag-over-left', 'drag-over-right');
+        }
+
+        function handleDrop(e, targetCol) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('drag-over-left', 'drag-over-right');
+            document.querySelectorAll('th').forEach(th => th.classList.remove('dragging'));
+            if (draggedColumn && draggedColumn !== targetCol) {
+                const fromIdx = visibleColumns.indexOf(draggedColumn);
+                const toIdx = visibleColumns.indexOf(targetCol);
+                visibleColumns.splice(fromIdx, 1);
+                const newToIdx = visibleColumns.indexOf(targetCol);
+                const rect = e.currentTarget.getBoundingClientRect();
+                const insertIdx = e.clientX < rect.left + rect.width / 2 ? newToIdx : newToIdx + 1;
+                visibleColumns.splice(insertIdx, 0, draggedColumn);
                 initTable();
-                updateTotalCount();
-                renderPagination();
-            </script>
-        </body>
-        </html>\`;
-        </html>
-`;
+            }
+        }
+
+        function toggleQueryPanel() {
+            document.getElementById('queryPanel').classList.toggle('hidden');
+        }
+
+        function loadSampleQuery(query) {
+            if (!query) return;
+            document.getElementById('queryInput').value = query;
+        }
+
+        function executeCustomQuery() {
+            const query = document.getElementById('queryInput').value;
+            if (!query.trim()) return;
+            const status = document.getElementById('queryStatus');
+            status.classList.remove('hidden');
+            status.innerHTML = 'Executing...';
+            
+            vscode.postMessage({
+                command: 'executeQuery',
+                query: query
+            });
+        }
+
+        function clearQuery() {
+            document.getElementById('queryInput').value = '';
+        }
+
+        function exportData() {
+            if (filteredData.length === 0) return alert('No data to export');
+            const header = visibleColumns.join(',');
+            const rows = filteredData.map(row => 
+                visibleColumns.map(col => \`"\${String(row[col] || '').replace(/"/g, '""')}"\`).join(',')
+            ).join('\\n');
+            const csv = header + '\\n' + rows;
+            
+            vscode.postMessage({
+                command: 'export',
+                data: csv,
+                filename: '${tableName}_export.csv'
+            });
+        }
+
+        document.getElementById('globalSearch').addEventListener('input', (e) => {
+            state.globalSearch = e.target.value;
+            processData();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!document.getElementById('filterPopover').classList.contains('hidden') && 
+                !e.target.closest('#filterPopover') && !e.target.closest('button[onclick*="openFilter"]')) {
+                closeFilterPopover();
+            }
+            if (!document.getElementById('columnManager').classList.contains('hidden') && 
+                !e.target.closest('#columnManager') && !e.target.closest('button[onclick*="toggleColumnManager"]')) {
+                document.getElementById('columnManager').classList.add('hidden');
+            }
+        });
+
+        // Handle messages from extension
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.command === 'queryResult') {
+                const status = document.getElementById('queryStatus');
+                if (message.data && message.data.length > 0) {
+                    allData = message.data;
+                    columns = Object.keys(message.data[0]);
+                    visibleColumns = [...columns];
+                    processData();
+                    status.innerHTML = \`✓ Query returned \${message.data.length} rows\`;
+                    setTimeout(() => status.classList.add('hidden'), 3000);
+                } else {
+                    status.innerHTML = '✓ Query executed successfully (no results)';
+                    setTimeout(() => status.classList.add('hidden'), 3000);
+                }
+            } else if (message.command === 'queryError') {
+                const status = document.getElementById('queryStatus');
+                status.innerHTML = '✗ Error: ' + message.error;
+            }
+        });
+
+        // Initialize
+        initTheme();
+        processData();
+    </script>
+</body>
+</html>`;
     }
 
 
@@ -2016,18 +2089,27 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
 
     async getChildren(element?: DatabaseTreeItem): Promise<DatabaseTreeItem[]> {
         if (!element) {
+            // Check if there are no connections - show empty state
+            if (this.explorer.connections.length === 0) {
+                return [
+                    new DatabaseTreeItem(null, 'No databases connected', vscode.TreeItemCollapsibleState.None, 'emptyState'),
+                    new DatabaseTreeItem(null, 'Add SQLite Database', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add MongoDB Connection', vscode.TreeItemCollapsibleState.None, 'actionButton')
+                ];
+            }
+            
             return this.explorer.connections.map(connection => 
                 new DatabaseTreeItem(connection, connection.name, vscode.TreeItemCollapsibleState.Expanded, 'connection')
             );
-        } else if (element.contextValue === 'connection') {
+        } else if (element.contextValue === 'connection' && element.connection) {
             // Fetch record counts for all tables
             const tableCountPromises = element.connection.tables.map(async (table: string) => {
                 let count = 0;
                 try {
-                    if (element.connection.type === 'sqlite') {
-                        count = await this.explorer.sqliteManager.getTableRowCount(element.connection.path, table);
+                    if (element.connection!.type === 'sqlite') {
+                        count = await this.explorer.sqliteManager.getTableRowCount(element.connection!.path, table);
                     } else {
-                        count = await this.explorer.mongoManager.getCollectionCount(element.connection.path, table);
+                        count = await this.explorer.mongoManager.getCollectionCount(element.connection!.path, table);
                     }
                 } catch (error) {
                     // If count fails, use 0

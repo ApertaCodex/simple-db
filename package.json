@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
