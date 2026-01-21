@@ -1884,7 +1884,7 @@ Rules:
             const end = start + state.rowsPerPage;
             const pageData = filteredData.slice(start, end);
 
-            tbody.innerHTML = pageData.map((row, rowIndex) => {
+            tbody.innerHTML = pageData.map((row, rowIndex) => {=
                 const cells = visibleColumns.map(col => {
                     const value = row[col];
                     let content;
