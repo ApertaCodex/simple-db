@@ -26,6 +26,11 @@ A powerful VS Code extension for viewing, filtering, and exploring SQLite and Mo
 
 ## 📸 Screenshots
 
+### Database Explorer
+![Database Explorer](screenshots/explorer.png)
+*Database Explorer sidebar with connections and table tree view*
+
+### Data Grid and Filtering
 ![Data Grid View](screenshots/data-grid.png)
 *Interactive data grid with sorting and filtering*
 
@@ -34,6 +39,29 @@ A powerful VS Code extension for viewing, filtering, and exploring SQLite and Mo
 
 ![Date Filter](screenshots/date-filter.png)
 *Date filtering with ranges and comparison operators*
+
+### Query Features
+![Sample Queries](screenshots/sample-queries-dropdown.png)
+*Predefined sample queries for quick database exploration*
+
+![AI Query Dialog](screenshots/ai-query-dialog.png)
+*AI-powered natural language query interface*
+
+![SQL Query Execution](screenshots/sql-query-execution.png)
+*SQL query editor with execution interface*
+
+![SQL Query Results](screenshots/sql-query-results.png)
+*Query results displaying aggregated data*
+
+### Advanced Filtering
+![Column Filter Menu](screenshots/column-filter-menu.png)
+*Column-specific filter menu*
+
+![Column Filter Options](screenshots/column-filter-options.png)
+*Available filter types and options*
+
+![Column Sorting](screenshots/column-sorting.png)
+*Multi-column sorting capabilities*
 
 ## 🚀 Installation
 

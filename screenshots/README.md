@@ -1,41 +1,52 @@
-# Screenshots Guide
+# Screenshots
 
-To complete the marketplace listing, please take the following screenshots:
+This directory contains screenshots for the marketplace listing.
 
-## 1. Database Explorer (explorer.png)
-- Open VS Code with the extension installed
-- Show the Database Explorer sidebar with at least one database connection
-- Take a screenshot showing the tree view with expanded tables/collections
-- Save as `explorer.png` in this directory
+## Available Screenshots
 
-## 2. Data Grid with Filters (data-grid.png)
-- Click on a table to open the data grid view
-- Show the data grid with some data visible
-- Optionally show an active filter
-- Take a screenshot of the entire data grid panel
-- Save as `data-grid.png` in this directory
+### 1. Database Explorer (explorer.png)
+Shows the Database Explorer sidebar with database connections and the tree view with expanded tables/collections.
 
-## 3. Number Filter Example (number-filter.png)
-- Click the filter icon on a number column
-- Type a filter like `>100` or `10-20`
-- Show the filter dropdown open with the help text visible
-- Take a screenshot showing the filter UI
-- Save as `number-filter.png` in this directory
+### 2. Data Grid with Filters (data-grid.png)
+Displays the data grid view with data visible and filtering capabilities.
 
-## 4. Date Filter Example (date-filter.png)
-- Click the filter icon on a date column
-- Type a date filter like `>2024-01-01` or a range
-- Show the filter dropdown with the help text
-- Take a screenshot
-- Save as `date-filter.png` in this directory
+### 3. Number Filter Example (number-filter.png)
+Demonstrates the filter UI on a number column with the filter dropdown and help text.
 
-## Recommended Screenshot Settings
-- Use VS Code dark theme for consistency
-- Capture at a reasonable resolution (at least 800x600)
-- PNG format preferred
-- Show actual data if possible (or use sample databases)
+### 4. Date Filter Example (date-filter.png)
+Shows the date filter functionality with the filter dropdown and help text.
 
-After adding screenshots, run:
+## Additional Screenshots
+
+### 5. Sample Queries Dropdown (sample-queries-dropdown.png)
+Shows the sample queries dropdown menu with predefined query options.
+
+### 6. Query Results Table (query-results-table.png)
+Displays query results in a table format with LIMIT 10 rows.
+
+### 7. AI Query Dialog (ai-query-dialog.png)
+Demonstrates the AI-powered query input dialog for natural language queries.
+
+### 8. SQL Query Execution (sql-query-execution.png)
+Shows the SQL query editor with "Click Run to Execute" prompt and query interface.
+
+### 9. SQL Query Results (sql-query-results.png)
+Displays executed SQL query results showing COUNT(DISTINCT asset) output.
+
+### 10. Data Table View (data-table-view.png)
+Shows the full data table view with all columns and data visible.
+
+### 11. Column Sorting (column-sorting.png)
+Demonstrates the column sorting feature with sorted data.
+
+### 12. Column Filter Menu (column-filter-menu.png)
+Shows the column filter menu opened on a data column.
+
+### 13. Column Filter Options (column-filter-options.png)
+Displays the expanded column filter options with various filter types available.
+
+## Next Steps
+To publish with these screenshots:
 ```bash
 git add screenshots/
 git commit -m "Add marketplace screenshots"
