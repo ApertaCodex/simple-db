@@ -441,14 +441,14 @@ export class DatabaseExplorer {
         }
     }
 
-    async exportToJSON(item: DatabaseTreeItem) {
+    async exportToJSON(item: DatabaseTreeItem, data?: any[]) {
         if (!item.connection) {
             vscode.window.showErrorMessage('No database connection available');
             return;
         }
-        
-        const connection = item.connection; // Store reference
-        
+
+        const connection = item.connection;
+
         try {
             if (connection.type !== 'sqlite') {
                 vscode.window.showErrorMessage('JSON export is currently only supported for SQLite databases');
@@ -456,33 +456,42 @@ export class DatabaseExplorer {
             }
 
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
-            const outputPath = await this.sqliteManager.exportToJSON(connection.path, tableName);
-            vscode.window.showInformationMessage(`Table "${tableName}" exported to JSON: ${outputPath}`);
-            
-            // Ask if user wants to open the exported file
+
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(`${tableName}.json`),
+                filters: { 'JSON Files': ['json'] },
+                title: 'Export to JSON'
+            });
+
+            if (!uri) {
+                return; // User cancelled
+            }
+
+            const outputPath = await this.sqliteManager.exportToJSON(connection.path, tableName, uri.fsPath, data);
+
             const openAction = 'Open File';
             const result = await vscode.window.showInformationMessage(
-                `Export completed successfully. Would you like to open the exported file?`,
+                `Exported ${data ? data.length + ' rows' : 'table'} to: ${outputPath}`,
                 openAction
             );
-            
+
             if (result === openAction) {
                 const document = await vscode.workspace.openTextDocument(outputPath);
                 await vscode.window.showTextDocument(document);
             }
         } catch (error) {
-            vscode.window.showErrorMessage(`Failed to export table to JSON: ${error}`);
+            vscode.window.showErrorMessage(`Export failed: ${error}`);
         }
     }
 
-    async exportToCSV(item: DatabaseTreeItem) {
+    async exportToCSV(item: DatabaseTreeItem, data?: any[]) {
         if (!item.connection) {
             vscode.window.showErrorMessage('No database connection available');
             return;
         }
-        
-        const connection = item.connection; // Store reference
-        
+
+        const connection = item.connection;
+
         try {
             if (connection.type !== 'sqlite') {
                 vscode.window.showErrorMessage('CSV export is currently only supported for SQLite databases');
@@ -490,22 +499,31 @@ export class DatabaseExplorer {
             }
 
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
-            const outputPath = await this.sqliteManager.exportToCSV(connection.path, tableName);
-            vscode.window.showInformationMessage(`Table "${tableName}" exported to CSV: ${outputPath}`);
-            
-            // Ask if user wants to open the exported file
+
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(`${tableName}.csv`),
+                filters: { 'CSV Files': ['csv'] },
+                title: 'Export to CSV'
+            });
+
+            if (!uri) {
+                return; // User cancelled
+            }
+
+            const outputPath = await this.sqliteManager.exportToCSV(connection.path, tableName, uri.fsPath, data);
+
             const openAction = 'Open File';
             const result = await vscode.window.showInformationMessage(
-                `Export completed successfully. Would you like to open the exported file?`,
+                `Exported ${data ? data.length + ' rows' : 'table'} to: ${outputPath}`,
                 openAction
             );
-            
+
             if (result === openAction) {
                 const document = await vscode.workspace.openTextDocument(outputPath);
                 await vscode.window.showTextDocument(document);
             }
         } catch (error) {
-            vscode.window.showErrorMessage(`Failed to export table to CSV: ${error}`);
+            vscode.window.showErrorMessage(`Export failed: ${error}`);
         }
     }
 

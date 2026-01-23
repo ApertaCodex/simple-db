@@ -1,6 +1,5 @@
 import * as sqlite3 from '@vscode/sqlite3';
 import * as fs from 'fs';
-import * as path from 'path';
 import { logger } from './logger';
 
 export class SQLiteManager {
@@ -90,17 +89,10 @@ export class SQLiteManager {
         });
     }
 
-    async exportToJSON(dbPath: string, tableName: string, outputPath?: string): Promise<string> {
+    async exportToJSON(dbPath: string, tableName: string, outputPath: string, data?: any[]): Promise<string> {
         try {
-            const data = await this.getTableData(dbPath, tableName);
-            
-            const jsonData = JSON.stringify(data, null, 2);
-            
-            if (!outputPath) {
-                const fileName = `${tableName}_${new Date().toISOString().slice(0, 10)}.json`;
-                outputPath = path.join(path.dirname(dbPath), fileName);
-            }
-            
+            const exportData = data ?? await this.getTableData(dbPath, tableName);
+            const jsonData = JSON.stringify(exportData, null, 2);
             await fs.promises.writeFile(outputPath, jsonData, 'utf8');
             return outputPath;
         } catch (error) {
@@ -108,18 +100,18 @@ export class SQLiteManager {
         }
     }
 
-    async exportToCSV(dbPath: string, tableName: string, outputPath?: string): Promise<string> {
+    async exportToCSV(dbPath: string, tableName: string, outputPath: string, data?: any[]): Promise<string> {
         try {
-            const data = await this.getTableData(dbPath, tableName);
-            
-            if (data.length === 0) {
-                throw new Error(`Table ${tableName} is empty`);
+            const exportData = data ?? await this.getTableData(dbPath, tableName);
+
+            if (exportData.length === 0) {
+                throw new Error(`No data to export`);
             }
-            
-            const headers = Object.keys(data[0]);
+
+            const headers = Object.keys(exportData[0]);
             const csvRows = [headers.join(',')];
-            
-            for (const row of data) {
+
+            for (const row of exportData) {
                 const values = headers.map(header => {
                     const value = row[header];
                     if (value === null || value === undefined) {
@@ -133,18 +125,42 @@ export class SQLiteManager {
                 });
                 csvRows.push(values.join(','));
             }
-            
+
             const csvData = csvRows.join('\n');
-            
-            if (!outputPath) {
-                const fileName = `${tableName}_${new Date().toISOString().slice(0, 10)}.csv`;
-                outputPath = path.join(path.dirname(dbPath), fileName);
-            }
-            
             await fs.promises.writeFile(outputPath, csvData, 'utf8');
             return outputPath;
         } catch (error) {
             throw new Error(`Failed to export table ${tableName} to CSV: ${error}`);
         }
+    }
+
+    static dataToJSON(data: any[]): string {
+        return JSON.stringify(data, null, 2);
+    }
+
+    static dataToCSV(data: any[]): string {
+        if (data.length === 0) {
+            return '';
+        }
+
+        const headers = Object.keys(data[0]);
+        const csvRows = [headers.join(',')];
+
+        for (const row of data) {
+            const values = headers.map(header => {
+                const value = row[header];
+                if (value === null || value === undefined) {
+                    return '';
+                }
+                const stringValue = String(value);
+                if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+                    return `"${stringValue.replace(/"/g, '""')}"`;
+                }
+                return stringValue;
+            });
+            csvRows.push(values.join(','));
+        }
+
+        return csvRows.join('\n');
     }
 }
