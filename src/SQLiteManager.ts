@@ -1,9 +1,11 @@
-import * as sqlite3 from 'sqlite3';
+import * as sqlite3 from '@vscode/sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from './logger';
 
 export class SQLiteManager {
     async getTables(dbPath: string): Promise<string[]> {
+        logger.debug(`Getting tables from SQLite database: ${dbPath}`);
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
                 if (err) reject(err);
@@ -11,9 +13,12 @@ export class SQLiteManager {
 
             db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, rows: any[]) => {
                 if (err) {
+                    logger.error(`Failed to get tables from ${dbPath}`, err);
                     reject(err);
                 } else {
-                    resolve(rows.map(row => row.name));
+                    const tables = rows.map(row => row.name);
+                    logger.debug(`Found ${tables.length} tables in ${dbPath}`);
+                    resolve(tables);
                 }
                 db.close();
             });

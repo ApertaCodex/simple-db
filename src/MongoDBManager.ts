@@ -1,16 +1,21 @@
 import mongoose from 'mongoose';
+import { logger } from './logger';
 
 export class MongoDBManager {
     async getCollections(connectionString: string): Promise<string[]> {
+        logger.debug(`Connecting to MongoDB: ${connectionString}`);
         const connection = await mongoose.createConnection(connectionString);
         try {
             await connection.asPromise();
             const db = connection.db;
             if (!db) {
+                logger.error('Database connection not established');
                 throw new Error('Database connection not established');
             }
             const collections = await db.listCollections().toArray();
-            return collections.map(col => col.name);
+            const collectionNames = collections.map(col => col.name);
+            logger.debug(`Found ${collectionNames.length} collections`);
+            return collectionNames;
         } finally {
             await connection.close();
         }

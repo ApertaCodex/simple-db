@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { DatabaseExplorer } from './DatabaseExplorer';
 import { SQLiteManager } from './SQLiteManager';
 import { MongoDBManager } from './MongoDBManager';
+import { logger } from './logger';
 
 export function activate(context: vscode.ExtensionContext) {
     try {
@@ -52,48 +53,61 @@ export function activate(context: vscode.ExtensionContext) {
         const commands = [
             vscode.commands.registerCommand('simpleDB.addSQLite', async () => {
                 try {
+                    logger.info('Command: addSQLite');
                     await databaseExplorer.addSQLite();
                 } catch (error) {
+                    logger.error('Error in addSQLite command', error);
                     vscode.window.showErrorMessage(`Error adding SQLite database: ${error}`);
                 }
             }),
             vscode.commands.registerCommand('simpleDB.addMongoDB', async () => {
                 try {
+                    logger.info('Command: addMongoDB');
                     await databaseExplorer.addMongoDB();
                 } catch (error) {
+                    logger.error('Error in addMongoDB command', error);
                     vscode.window.showErrorMessage(`Error adding MongoDB connection: ${error}`);
                 }
             }),
             vscode.commands.registerCommand('simpleDB.refresh', async () => {
                 try {
+                    logger.info('Command: refresh');
                     // Auto-refresh tables/collections for all connections
                     const connections = databaseExplorer.getConnections();
+                    logger.debug(`Refreshing ${connections.length} connections`);
                     for (const connection of connections) {
                         await databaseExplorer.refreshTables(connection);
                     }
                     treeDataProvider.refresh();
                 } catch (error) {
+                    logger.error('Error in refresh command', error);
                     vscode.window.showErrorMessage(`Error refreshing: ${error}`);
                 }
             }),
             vscode.commands.registerCommand('simpleDB.removeConnection', (item) => {
                 try {
+                    logger.info(`Command: removeConnection for ${item.connection?.name}`);
                     databaseExplorer.removeConnection(item);
                 } catch (error) {
+                    logger.error('Error in removeConnection command', error);
                     vscode.window.showErrorMessage(`Error removing connection: ${error}`);
                 }
             }),
             vscode.commands.registerCommand('simpleDB.viewData', (item) => {
                 try {
+                    logger.info(`Command: viewData for table ${item.tableName}`);
                     databaseExplorer.viewData(item);
                 } catch (error) {
+                    logger.error('Error in viewData command', error);
                     vscode.window.showErrorMessage(`Error viewing data: ${error}`);
                 }
             }),
             vscode.commands.registerCommand('simpleDB.openSQLiteFile', (uri) => {
                 try {
+                    logger.info(`Command: openSQLiteFile`);
                     openSQLiteFile(uri);
                 } catch (error) {
+                    logger.error('Error in openSQLiteFile command', error);
                     vscode.window.showErrorMessage(`Error opening SQLite file: ${error}`);
                 }
             }),
@@ -124,6 +138,9 @@ export function activate(context: vscode.ExtensionContext) {
                 } catch (error) {
                     vscode.window.showErrorMessage(`Error exporting to CSV: ${error}`);
                 }
+            }),
+            vscode.commands.registerCommand('simpleDB.showLogs', () => {
+                logger.show();
             })
         ];
 
@@ -136,6 +153,7 @@ export function activate(context: vscode.ExtensionContext) {
                 if (document.uri.scheme === 'file') {
                     const fileName = document.fileName.toLowerCase();
                     if (fileName.endsWith('.db') || fileName.endsWith('.sqlite') || fileName.endsWith('.sqlite3')) {
+                        logger.debug(`Detected SQLite file opened: ${fileName}`);
                         // Check if this file is already in connections
                         const existingConnection = databaseExplorer.getConnections().find(
                             (conn: any) => conn.type === 'sqlite' && conn.path === document.uri.fsPath
@@ -145,6 +163,7 @@ export function activate(context: vscode.ExtensionContext) {
                             // Auto-open SQLite files when they're opened in the editor
                             const config = vscode.workspace.getConfiguration('simpleDB');
                             if (config.get<boolean>('autoOpenSQLiteFiles', true)) {
+                                logger.info(`Auto-opening SQLite file: ${document.uri.fsPath}`);
                                 // Silently add the database
                                 await openSQLiteFile(document.uri);
                             }
@@ -154,11 +173,14 @@ export function activate(context: vscode.ExtensionContext) {
             })
         );
         
-        console.log('Simple DB extension activated successfully');
+        logger.info('Simple DB extension activated successfully');
     } catch (error) {
         vscode.window.showErrorMessage(`Failed to activate Simple DB extension: ${error}`);
-        console.error('Extension activation error:', error);
+        logger.error('Extension activation error', error);
     }
 }
 
-export function deactivate() {}
+export function deactivate() {
+    logger.info('Simple DB extension deactivated');
+    logger.dispose();
+}

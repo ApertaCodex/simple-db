@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { SQLiteManager } from './SQLiteManager';
 import { MongoDBManager } from './MongoDBManager';
+import { logger } from './logger';
 
 interface DatabaseItem {
     name: string;
@@ -129,6 +130,7 @@ export class DatabaseExplorer {
     }
 
     private async addSQLiteConnection(filePath: string, name: string) {
+        logger.info(`Adding SQLite connection: ${name} (${filePath})`);
         const connection: DatabaseItem = {
             name,
             type: 'sqlite',
@@ -142,8 +144,10 @@ export class DatabaseExplorer {
             this.connections.push(connection);
             this.saveConnections();
             this._treeDataProvider.refresh();
+            logger.info(`SQLite database "${name}" added successfully with ${connection.tables.length} tables`);
             vscode.window.showInformationMessage(`SQLite database "${name}" added successfully with ${connection.tables.length} tables`);
         } catch (error) {
+            logger.error(`Failed to connect to SQLite database "${name}"`, error);
             vscode.window.showErrorMessage(`Failed to connect to SQLite database: ${error}`);
         }
     }
@@ -170,12 +174,15 @@ export class DatabaseExplorer {
                 };
 
                 try {
+                    logger.info(`Adding MongoDB connection: ${name} (${connectionString})`);
                     connection.tables = await this.mongoManager.getCollections(connectionString);
                     this.connections.push(connection);
                     this.saveConnections();
                     this._treeDataProvider.refresh();
+                    logger.info(`MongoDB connection "${name}" added successfully with ${connection.tables.length} collections`);
                     vscode.window.showInformationMessage(`MongoDB connection "${name}" added successfully with ${connection.tables.length} collections`);
                 } catch (error) {
+                    logger.error(`Failed to connect to MongoDB "${name}"`, error);
                     vscode.window.showErrorMessage(`Failed to connect to MongoDB: ${error}`);
                 }
             }
@@ -184,6 +191,7 @@ export class DatabaseExplorer {
 
     async refreshTables(connection: DatabaseItem) {
         try {
+            logger.info(`Refreshing tables for connection: ${connection.name}`);
             // Reset counts so they get fetched again
             connection.countsLoaded = false;
             connection.tableCounts = {};
@@ -193,15 +201,18 @@ export class DatabaseExplorer {
                 connection.tables = collections;
                 this.saveConnections();
                 this._treeDataProvider.refresh();
+                logger.info(`Collections refreshed for "${connection.name}": ${collections.length} collections`);
                 vscode.window.showInformationMessage(`Collections refreshed for "${connection.name}"`);
             } else if (connection.type === 'sqlite') {
                 const tables = await this.sqliteManager.getTables(connection.path);
                 connection.tables = tables;
                 this.saveConnections();
                 this._treeDataProvider.refresh();
+                logger.info(`Tables refreshed for "${connection.name}": ${tables.length} tables`);
                 vscode.window.showInformationMessage(`Tables refreshed for "${connection.name}"`);
             }
         } catch (error) {
+            logger.error(`Failed to refresh tables/collections for "${connection.name}"`, error);
             vscode.window.showErrorMessage(`Failed to refresh tables/collections: ${error}`);
         }
     }
@@ -225,6 +236,7 @@ export class DatabaseExplorer {
             return;
         }
         
+        logger.info(`Viewing data for table: ${item.tableName} in ${item.connection.name}`);
         const connection = item.connection; // Store reference for callbacks
         
         try {

@@ -1,4 +1,4 @@
-.PHONY: build build-major build-minor patch-version major-version minor-version install install-all-ide install-code install-code-insiders install-windsurf install-cursor install-code-server uninstall uninstall-code uninstall-code-insiders uninstall-windsurf uninstall-cursor uninstall-code-server clean publish
+.PHONY: build build-major build-minor patch-version major-version minor-version install install-all-ide install-code install-code-insiders install-windsurf install-cursor install-code-server uninstall uninstall-code uninstall-code-insiders uninstall-windsurf uninstall-cursor uninstall-code-server clean publish publish-openvsx release
 
 # Default target
 all: build
@@ -148,9 +148,24 @@ uninstall-code-server:
 publish:
 	@echo "Publishing extension to VS Code Marketplace..."
 	vsce publish --no-dependencies
-	@echo "Extension published successfully"
+	@echo "Extension published to VS Code Marketplace successfully"
 
-release: build publish
+# Publish to OpenVSX
+publish-openvsx:
+	@echo "Publishing extension to OpenVSX..."
+	@export $$(grep -v '^#' .env | xargs) 2>/dev/null || true; \
+	if [ -z "$$OVSX_PAT" ]; then \
+		echo "Error: OVSX_PAT environment variable is not set"; \
+		echo "Set it in .env file or export it in your shell"; \
+		echo "Get your token from https://open-vsx.org/user-settings/tokens"; \
+		exit 1; \
+	fi; \
+	npx ovsx publish ./simple-db-latest.vsix -p $$OVSX_PAT
+	@echo "Extension published to OpenVSX successfully"
+
+# Release to both VS Code Marketplace and OpenVSX
+release: build publish publish-openvsx
+	@echo "Release completed to both VS Code Marketplace and OpenVSX"
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
@@ -182,6 +197,8 @@ help:
 	@echo "  uninstall-windsurf     - Uninstall from Windsurf only"
 	@echo "  uninstall-cursor       - Uninstall from Cursor only"
 	@echo "  uninstall-code-server  - Uninstall from code-server only"
-	@echo "  publish                - Build and publish to VS Code Marketplace"
+	@echo "  publish                - Publish to VS Code Marketplace"
+	@echo "  publish-openvsx        - Publish to OpenVSX (requires OVSX_PAT env var)"
+	@echo "  release                - Build and publish to both VS Code Marketplace and OpenVSX"
 	@echo "  clean                  - Remove build artifacts"
 	@echo "  help                   - Show this help message"
