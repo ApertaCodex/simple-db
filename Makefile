@@ -147,7 +147,13 @@ uninstall-code-server:
 # Publish to VS Code Marketplace
 publish:
 	@echo "Publishing extension to VS Code Marketplace..."
-	vsce publish --no-dependencies
+	@export $$(grep -v '^#' .env | xargs) 2>/dev/null || true; \
+	if [ -z "$$VSCE_PAT" ]; then \
+		echo "Error: VSCE_PAT environment variable is not set"; \
+		echo "Set it in .env file or export it in your shell"; \
+		exit 1; \
+	fi; \
+	vsce publish --no-dependencies -p $$VSCE_PAT
 	@echo "Extension published to VS Code Marketplace successfully"
 
 # Publish to OpenVSX

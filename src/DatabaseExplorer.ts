@@ -690,7 +690,7 @@ Rules:
         try {
             // For now, we'll use SQLite manager to execute queries
             // This is a simplified implementation
-            const sqlite3 = require('sqlite3').verbose();
+            const sqlite3 = require('@vscode/sqlite3').verbose();
             const db = new sqlite3.Database(dbPath);
             
             return new Promise((resolve, reject) => {

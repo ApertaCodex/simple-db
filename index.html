@@ -338,22 +338,6 @@
             </tbody>
         </table>
 
-        <!-- Pending Overlay -->
-        <div id="pendingOverlay"
-            class="hidden absolute inset-0 bg-white/50 z-20 flex items-start justify-center pt-20 backdrop-blur-[1px] transition-all duration-300 dark:bg-black/80">
-            <div
-                class="bg-white border border-blue-200 shadow-lg rounded-lg px-6 py-4 flex flex-col items-center dark:bg-zinc-900 dark:border-blue-900">
-                <span
-                    class="material-symbols-outlined text-blue-600 text-3xl mb-2 dark:text-blue-400">arrow_upward</span>
-                <p class="font-medium text-gray-800 dark:text-zinc-100">New SQL Generated</p>
-                <p class="text-xs text-gray-500 mb-3 dark:text-zinc-400">Table data is from previous query.</p>
-                <button onclick="executeCustomQuery()"
-                    class="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded hover:bg-blue-700 shadow-md transform transition-transform hover:scale-105">
-                    Click Run to Execute
-                </button>
-            </div>
-        </div>
-
         <div class="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-zinc-500" id="emptyState">
             <span class="material-symbols-outlined text-6xl mb-2">upload_file</span>
             <p class="text-lg font-medium text-gray-500 dark:text-zinc-400">No database loaded</p>
@@ -1110,8 +1094,7 @@
                         const finalSql = await generateAIQuery(sql);
                         document.getElementById('queryInput').value = finalSql;
                         setQueryMode('sql');
-                        status.innerHTML = 'SQL Generated. Click Run to Execute.';
-                        document.getElementById('pendingOverlay').classList.remove('hidden');
+                        status.innerHTML = '✓ SQL generated. Click Run to execute.';
                     } catch (e) { status.innerHTML = "AI Error: " + e.message; }
                 }
                 return;
@@ -1142,7 +1125,6 @@
                         updateTotalCount();
                         renderPagination();
                         status.innerHTML = `Success. ${allData.length} rows returned.`;
-                        document.getElementById('pendingOverlay').classList.add('hidden');
                     } catch (e) { status.innerHTML = "Error: " + e.message; }
                 }, 100);
             }
@@ -1505,25 +1487,22 @@
                                 setTimeout(() => status.classList.add('hidden'), 3000);
                             }
                         }
-                        document.getElementById('pendingOverlay')?.classList.add('hidden');
                         break;
-                        
+
                     case 'queryError':
                         if (status) {
                             status.classList.remove('hidden');
                             status.innerHTML = '✗ Error: ' + message.error;
                         }
-                        document.getElementById('pendingOverlay')?.classList.add('hidden');
                         break;
-                        
+
                     case 'aiQueryResult':
                         document.getElementById('queryInput').value = message.sqlQuery;
                         setQueryMode('sql');
                         if (status) {
                             status.classList.remove('hidden');
-                            status.innerHTML = 'SQL Generated. Click Run to Execute.';
+                            status.innerHTML = '✓ SQL generated. Click Run to execute.';
                         }
-                        document.getElementById('pendingOverlay')?.classList.remove('hidden');
                         break;
                         
                     case 'aiQueryError':
