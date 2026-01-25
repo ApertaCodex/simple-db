@@ -527,6 +527,112 @@ export class DatabaseExplorer {
         }
     }
 
+    async importFromJSON(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            vscode.window.showErrorMessage('No database connection available');
+            return;
+        }
+
+        const connection = item.connection;
+
+        if (connection.type !== 'sqlite') {
+            vscode.window.showErrorMessage('Import is currently only supported for SQLite databases');
+            return;
+        }
+
+        try {
+            const uri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                canSelectMany: false,
+                filters: { 'JSON Files': ['json'] },
+                title: 'Select JSON file to import'
+            });
+
+            if (!uri || uri.length === 0) {
+                return;
+            }
+
+            const tableName = await vscode.window.showInputBox({
+                prompt: 'Enter table name for imported data',
+                value: uri[0].fsPath.split('/').pop()?.replace('.json', '') || 'imported_data',
+                validateInput: (value) => {
+                    if (!value || value.trim().length === 0) {
+                        return 'Table name is required';
+                    }
+                    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
+                        return 'Table name must start with letter or underscore, and contain only letters, numbers, underscores';
+                    }
+                    return null;
+                }
+            });
+
+            if (!tableName) {
+                return;
+            }
+
+            const rowCount = await this.sqliteManager.importFromJSON(connection.path, tableName, uri[0].fsPath);
+            vscode.window.showInformationMessage(`Imported ${rowCount} rows into table "${tableName}"`);
+
+            await this.refreshTables(connection);
+            this._treeDataProvider.refresh();
+        } catch (error) {
+            vscode.window.showErrorMessage(`Import failed: ${error}`);
+        }
+    }
+
+    async importFromCSV(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            vscode.window.showErrorMessage('No database connection available');
+            return;
+        }
+
+        const connection = item.connection;
+
+        if (connection.type !== 'sqlite') {
+            vscode.window.showErrorMessage('Import is currently only supported for SQLite databases');
+            return;
+        }
+
+        try {
+            const uri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                canSelectMany: false,
+                filters: { 'CSV Files': ['csv'] },
+                title: 'Select CSV file to import'
+            });
+
+            if (!uri || uri.length === 0) {
+                return;
+            }
+
+            const tableName = await vscode.window.showInputBox({
+                prompt: 'Enter table name for imported data',
+                value: uri[0].fsPath.split('/').pop()?.replace('.csv', '') || 'imported_data',
+                validateInput: (value) => {
+                    if (!value || value.trim().length === 0) {
+                        return 'Table name is required';
+                    }
+                    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
+                        return 'Table name must start with letter or underscore, and contain only letters, numbers, underscores';
+                    }
+                    return null;
+                }
+            });
+
+            if (!tableName) {
+                return;
+            }
+
+            const rowCount = await this.sqliteManager.importFromCSV(connection.path, tableName, uri[0].fsPath);
+            vscode.window.showInformationMessage(`Imported ${rowCount} rows into table "${tableName}"`);
+
+            await this.refreshTables(connection);
+            this._treeDataProvider.refresh();
+        } catch (error) {
+            vscode.window.showErrorMessage(`Import failed: ${error}`);
+        }
+    }
+
     async generateAIQueryForTable(connection: DatabaseItem, tableName: string, prompt: string): Promise<string> {
         try {
             // Get OpenAI API key from environment or settings
@@ -641,67 +747,6 @@ Rules:
         }
         const tableName = item.tableName || (item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown');
         return this.generateAIQueryForTable(item.connection, tableName, prompt);
-    }
-
-    async queryTable(item: DatabaseTreeItem) {
-        if (!item.connection) {
-            vscode.window.showErrorMessage('No database connection available');
-            return;
-        }
-        
-        const connection = item.connection; // Store reference for callbacks
-        
-        const panel = vscode.window.createWebviewPanel(
-            'queryInterface',
-            `Query: ${item.tableName}`,
-            vscode.ViewColumn.One,
-            {
-                enableScripts: true,
-                retainContextWhenHidden: true
-            }
-        );
-
-        const sampleQueries = connection.type === 'sqlite' ? [
-            { label: 'Select All Records', query: `SELECT * FROM ${item.tableName} LIMIT 100` },
-            { label: 'Count Records', query: `SELECT COUNT(*) as total FROM ${item.tableName}` },
-            { label: 'Select First 10', query: `SELECT * FROM ${item.tableName} LIMIT 10` },
-            { label: 'Select Distinct Values', query: `SELECT DISTINCT * FROM ${item.tableName}` },
-            { label: 'Delete All Records', query: `DELETE FROM ${item.tableName}` },
-            { label: 'Drop Table', query: `DROP TABLE ${item.tableName}` }
-        ] : [
-            { label: 'Find All Documents', query: `db.${item.tableName}.find({})` },
-            { label: 'Count Documents', query: `db.${item.tableName}.countDocuments({})` },
-            { label: 'Find First 10', query: `db.${item.tableName}.find({}).limit(10)` },
-            { label: 'Delete All Documents', query: `db.${item.tableName}.deleteMany({})` },
-            { label: 'Drop Collection', query: `db.${item.tableName}.drop()` }
-        ];
-
-        panel.webview.html = this.getQueryInterfaceHtml(item.tableName, sampleQueries);
-
-        panel.webview.onDidReceiveMessage(async (message) => {
-            if (message.command === 'executeQuery') {
-                try {
-                    let result;
-                    if (connection.type === 'sqlite') {
-                        result = await this.executeQuery(connection.path, message.query);
-                    } else {
-                        // MongoDB query execution
-                        result = await this.executeMongoQuery(connection.path, message.query, item.tableName);
-                    }
-
-                    panel.webview.postMessage({
-                        command: 'queryResult',
-                        data: result.data || result,
-                        rowCount: result.data?.length || 0
-                    });
-                } catch (error) {
-                    panel.webview.postMessage({
-                        command: 'queryError',
-                        error: error instanceof Error ? error.message : String(error)
-                    });
-                }
-            }
-        });
     }
 
     private async executeQuery(dbPath: string, query: string): Promise<any> {
@@ -1396,228 +1441,6 @@ Rules:
                         document.getElementById('query-editor').classList.remove('expanded');
                     }
                 });
-            </script>
-        </body>
-        </html>`;
-    }
-
-    private getQueryInterfaceHtml(tableName: string, sampleQueries: Array<{label: string, query: string}>): string {
-        const sampleOptions = sampleQueries.map((sq, idx) =>
-            `<option value="${idx}">${sq.label}</option>`
-        ).join('');
-
-        const queriesJson = JSON.stringify(sampleQueries.map(sq => sq.query));
-
-        return `<!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {
-                    font-family: var(--vscode-font-family);
-                    padding: 20px;
-                    color: var(--vscode-foreground);
-                    background-color: var(--vscode-editor-background);
-                }
-                .header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 20px;
-                }
-                h2 { margin: 0; }
-                .query-section {
-                    margin-bottom: 20px;
-                }
-                .sample-queries {
-                    margin-bottom: 10px;
-                    display: flex;
-                    gap: 10px;
-                    align-items: center;
-                }
-                select, button {
-                    padding: 6px 12px;
-                    background-color: var(--vscode-dropdown-background);
-                    color: var(--vscode-dropdown-foreground);
-                    border: 1px solid var(--vscode-dropdown-border);
-                    cursor: pointer;
-                }
-                button {
-                    background-color: var(--vscode-button-background);
-                    color: var(--vscode-button-foreground);
-                }
-                button:hover {
-                    background-color: var(--vscode-button-hoverBackground);
-                }
-                button.danger {
-                    background-color: #d73a49;
-                    color: white;
-                }
-                button.danger:hover {
-                    background-color: #cb2431;
-                }
-                textarea {
-                    width: 100%;
-                    min-height: 150px;
-                    padding: 10px;
-                    font-family: 'Courier New', monospace;
-                    font-size: 14px;
-                    background-color: var(--vscode-input-background);
-                    color: var(--vscode-input-foreground);
-                    border: 1px solid var(--vscode-input-border);
-                    resize: vertical;
-                }
-                .results {
-                    margin-top: 20px;
-                }
-                .result-info {
-                    padding: 10px;
-                    background-color: var(--vscode-editor-inactiveSelectionBackground);
-                    margin-bottom: 10px;
-                    border-radius: 3px;
-                }
-                .error {
-                    color: var(--vscode-errorForeground);
-                    background-color: var(--vscode-inputValidation-errorBackground);
-                    padding: 10px;
-                    border-radius: 3px;
-                    margin-top: 10px;
-                }
-                table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-top: 10px;
-                }
-                th, td {
-                    padding: 8px;
-                    border: 1px solid var(--vscode-panel-border);
-                    text-align: left;
-                }
-                th {
-                    background-color: var(--vscode-editor-selectionBackground);
-                    font-weight: bold;
-                }
-                .warning {
-                    background-color: #856404;
-                    color: #fff3cd;
-                    padding: 10px;
-                    border-radius: 3px;
-                    margin-bottom: 10px;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h2>Query: ${tableName}</h2>
-            </div>
-
-            <div class="query-section">
-                <div class="sample-queries">
-                    <label for="sampleQuery">Sample Queries:</label>
-                    <select id="sampleQuery" onchange="loadSampleQuery()">
-                        <option value="">-- Select a query --</option>
-                        ${sampleOptions}
-                    </select>
-                    <button onclick="loadSampleQuery()">Load</button>
-                </div>
-
-                <textarea id="queryInput" placeholder="Enter your SQL query here..."></textarea>
-
-                <div style="margin-top: 10px; display: flex; gap: 10px;">
-                    <button onclick="executeQuery()">Execute Query</button>
-                    <button onclick="clearResults()">Clear Results</button>
-                </div>
-            </div>
-
-            <div id="results" class="results"></div>
-
-            <script>
-                const vscode = acquireVsCodeApi();
-                const sampleQueries = ${queriesJson};
-
-                function loadSampleQuery() {
-                    const select = document.getElementById('sampleQuery');
-                    const idx = select.value;
-                    if (idx !== '' && sampleQueries[idx]) {
-                        document.getElementById('queryInput').value = sampleQueries[idx];
-
-                        // Show warning for destructive queries
-                        const query = sampleQueries[idx].toUpperCase();
-                        if (query.includes('DELETE') || query.includes('DROP')) {
-                            showWarning();
-                        }
-                    }
-                }
-
-                function showWarning() {
-                    const resultsDiv = document.getElementById('results');
-                    resultsDiv.innerHTML = '<div class="warning">⚠️ Warning: This is a destructive operation that cannot be undone!</div>';
-                }
-
-                function executeQuery() {
-                    const query = document.getElementById('queryInput').value.trim();
-                    if (!query) {
-                        document.getElementById('results').innerHTML = '<div class="error">Please enter a query</div>';
-                        return;
-                    }
-
-                    // Show loading
-                    document.getElementById('results').innerHTML = '<div class="result-info">Executing query...</div>';
-
-                    vscode.postMessage({
-                        command: 'executeQuery',
-                        query: query
-                    });
-                }
-
-                function clearResults() {
-                    document.getElementById('results').innerHTML = '';
-                    document.getElementById('queryInput').value = '';
-                    document.getElementById('sampleQuery').value = '';
-                }
-
-                window.addEventListener('message', event => {
-                    const message = event.data;
-
-                    if (message.command === 'queryResult') {
-                        displayResults(message.data, message.rowCount);
-                    } else if (message.command === 'queryError') {
-                        displayError(message.error);
-                    }
-                });
-
-                function displayResults(data, rowCount) {
-                    const resultsDiv = document.getElementById('results');
-
-                    if (!data || data.length === 0) {
-                        resultsDiv.innerHTML = '<div class="result-info">Query executed successfully. No rows returned.</div>';
-                        return;
-                    }
-
-                    const columns = Object.keys(data[0]);
-                    let html = \`<div class="result-info">Returned \${rowCount} row(s)</div>\`;
-
-                    html += '<table><thead><tr>';
-                    columns.forEach(col => {
-                        html += \`<th>\${col}</th>\`;
-                    });
-                    html += '</tr></thead><tbody>';
-
-                    data.forEach(row => {
-                        html += '<tr>';
-                        columns.forEach(col => {
-                            const value = row[col] === null ? 'NULL' : row[col];
-                            html += \`<td>\${value}</td>\`;
-                        });
-                        html += '</tr>';
-                    });
-
-                    html += '</tbody></table>';
-                    resultsDiv.innerHTML = html;
-                }
-
-                function displayError(error) {
-                    document.getElementById('results').innerHTML = \`<div class="error">Error: \${error}</div>\`;
-                }
             </script>
         </body>
         </html>`;

@@ -163,4 +163,135 @@ export class SQLiteManager {
 
         return csvRows.join('\n');
     }
+
+    async importFromJSON(dbPath: string, tableName: string, jsonPath: string): Promise<number> {
+        const content = await fs.promises.readFile(jsonPath, 'utf8');
+        const data = JSON.parse(content);
+
+        if (!Array.isArray(data) || data.length === 0) {
+            throw new Error('JSON file must contain a non-empty array of objects');
+        }
+
+        return this.importData(dbPath, tableName, data);
+    }
+
+    async importFromCSV(dbPath: string, tableName: string, csvPath: string): Promise<number> {
+        const content = await fs.promises.readFile(csvPath, 'utf8');
+        const data = this.parseCSV(content);
+
+        if (data.length === 0) {
+            throw new Error('CSV file is empty or has no data rows');
+        }
+
+        return this.importData(dbPath, tableName, data);
+    }
+
+    private parseCSV(content: string): any[] {
+        const lines = content.split(/\r?\n/).filter(line => line.trim());
+        if (lines.length < 2) {
+            return [];
+        }
+
+        const headers = this.parseCSVLine(lines[0]);
+        const data: any[] = [];
+
+        for (let i = 1; i < lines.length; i++) {
+            const values = this.parseCSVLine(lines[i]);
+            if (values.length === headers.length) {
+                const row: any = {};
+                headers.forEach((header, idx) => {
+                    row[header] = values[idx];
+                });
+                data.push(row);
+            }
+        }
+
+        return data;
+    }
+
+    private parseCSVLine(line: string): string[] {
+        const values: string[] = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            const nextChar = line[i + 1];
+
+            if (inQuotes) {
+                if (char === '"' && nextChar === '"') {
+                    current += '"';
+                    i++;
+                } else if (char === '"') {
+                    inQuotes = false;
+                } else {
+                    current += char;
+                }
+            } else {
+                if (char === '"') {
+                    inQuotes = true;
+                } else if (char === ',') {
+                    values.push(current);
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+        }
+        values.push(current);
+
+        return values;
+    }
+
+    private async importData(dbPath: string, tableName: string, data: any[]): Promise<number> {
+        return new Promise((resolve, reject) => {
+            const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+                if (err) reject(err);
+            });
+
+            const columns = Object.keys(data[0]);
+            const sanitizedTableName = tableName.replace(/[^a-zA-Z0-9_]/g, '_');
+            const columnDefs = columns.map(col => `"${col.replace(/"/g, '""')}" TEXT`).join(', ');
+            const createTableSQL = `CREATE TABLE IF NOT EXISTS "${sanitizedTableName}" (${columnDefs})`;
+
+            db.run(createTableSQL, (err) => {
+                if (err) {
+                    db.close();
+                    reject(new Error(`Failed to create table: ${err.message}`));
+                    return;
+                }
+
+                const placeholders = columns.map(() => '?').join(', ');
+                const insertSQL = `INSERT INTO "${sanitizedTableName}" (${columns.map(c => `"${c.replace(/"/g, '""')}"`).join(', ')}) VALUES (${placeholders})`;
+
+                const stmt = db.prepare(insertSQL, (err) => {
+                    if (err) {
+                        db.close();
+                        reject(new Error(`Failed to prepare statement: ${err.message}`));
+                        return;
+                    }
+                });
+
+                let inserted = 0;
+                db.serialize(() => {
+                    db.run('BEGIN TRANSACTION');
+                    for (const row of data) {
+                        const values = columns.map(col => row[col] ?? null);
+                        stmt.run(values, (err) => {
+                            if (!err) inserted++;
+                        });
+                    }
+                    db.run('COMMIT', (err) => {
+                        stmt.finalize();
+                        db.close();
+                        if (err) {
+                            reject(new Error(`Failed to commit: ${err.message}`));
+                        } else {
+                            resolve(inserted);
+                        }
+                    });
+                });
+            });
+        });
+    }
 }

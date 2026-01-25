@@ -170,7 +170,8 @@ publish-openvsx:
 	@echo "Extension published to OpenVSX successfully"
 
 # Release to both VS Code Marketplace and OpenVSX
-release: build publish publish-openvsx
+release: build publish publish-openvsx 
+	@git aicommit -y
 	@echo "Release completed to both VS Code Marketplace and OpenVSX"
 # Clean build artifacts
 clean:

@@ -3,6 +3,7 @@ import { DatabaseExplorer } from './DatabaseExplorer';
 import { SQLiteManager } from './SQLiteManager';
 import { MongoDBManager } from './MongoDBManager';
 import { logger } from './logger';
+import { SQLiteEditorProvider } from './SQLiteEditorProvider';
 
 export function activate(context: vscode.ExtensionContext) {
     try {
@@ -29,7 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const activeEditor = vscode.window.activeTextEditor;
                 if (activeEditor && activeEditor.document.uri.scheme === 'file') {
                     const fileName = activeEditor.document.fileName.toLowerCase();
-                    if (fileName.endsWith('.db') || fileName.endsWith('.sqlite') || fileName.endsWith('.sqlite3')) {
+                    if (fileName.endsWith('.db') || fileName.endsWith('.sqlite') || fileName.endsWith('.sqlite3') || fileName.endsWith('.db3')) {
                         fileUri = activeEditor.document.uri;
                     }
                 }
@@ -37,7 +38,7 @@ export function activate(context: vscode.ExtensionContext) {
                 if (!fileUri) {
                     const selected = await vscode.window.showOpenDialog({
                         canSelectFiles: true,
-                        filters: { 'SQLite Database': ['db', 'sqlite', 'sqlite3'] }
+                        filters: { 'SQLite Database': ['db', 'sqlite', 'sqlite3', 'db3'] }
                     });
                     if (selected && selected[0]) {
                         fileUri = selected[0];
@@ -118,13 +119,6 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(`Error opening query console: ${error}`);
                 }
             }),
-            vscode.commands.registerCommand('simpleDB.queryTable', (item) => {
-                try {
-                    databaseExplorer.queryTable(item);
-                } catch (error) {
-                    vscode.window.showErrorMessage(`Error opening query interface: ${error}`);
-                }
-            }),
             vscode.commands.registerCommand('simpleDB.exportToJSON', (item) => {
                 try {
                     databaseExplorer.exportToJSON(item);
@@ -139,6 +133,20 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(`Error exporting to CSV: ${error}`);
                 }
             }),
+            vscode.commands.registerCommand('simpleDB.importFromJSON', (item) => {
+                try {
+                    databaseExplorer.importFromJSON(item);
+                } catch (error) {
+                    vscode.window.showErrorMessage(`Error importing from JSON: ${error}`);
+                }
+            }),
+            vscode.commands.registerCommand('simpleDB.importFromCSV', (item) => {
+                try {
+                    databaseExplorer.importFromCSV(item);
+                } catch (error) {
+                    vscode.window.showErrorMessage(`Error importing from CSV: ${error}`);
+                }
+            }),
             vscode.commands.registerCommand('simpleDB.showLogs', () => {
                 logger.show();
             })
@@ -146,13 +154,13 @@ export function activate(context: vscode.ExtensionContext) {
 
         commands.forEach(command => context.subscriptions.push(command));
 
-        // Register file handler for .db, .sqlite, .sqlite3 files
+        // Register file handler for .db, .sqlite, .sqlite3, .db3 files
         // Note: Binary files may not trigger onDidOpenTextDocument, but this handles text-like opens
         context.subscriptions.push(
             vscode.workspace.onDidOpenTextDocument(async (document) => {
                 if (document.uri.scheme === 'file') {
                     const fileName = document.fileName.toLowerCase();
-                    if (fileName.endsWith('.db') || fileName.endsWith('.sqlite') || fileName.endsWith('.sqlite3')) {
+                    if (fileName.endsWith('.db') || fileName.endsWith('.sqlite') || fileName.endsWith('.sqlite3') || fileName.endsWith('.db3')) {
                         logger.debug(`Detected SQLite file opened: ${fileName}`);
                         // Check if this file is already in connections
                         const existingConnection = databaseExplorer.getConnections().find(
@@ -172,7 +180,26 @@ export function activate(context: vscode.ExtensionContext) {
                 }
             })
         );
-        
+
+        // Register custom editor provider for SQLite files
+        const editorProvider = new SQLiteEditorProvider(
+            context,
+            async (uri: vscode.Uri) => {
+                await databaseExplorer.openSQLiteFile(uri.fsPath);
+            }
+        );
+        context.subscriptions.push(
+            vscode.window.registerCustomEditorProvider(
+                SQLiteEditorProvider.viewType,
+                editorProvider,
+                {
+                    webviewOptions: {
+                        retainContextWhenHidden: true
+                    }
+                }
+            )
+        );
+
         logger.info('Simple DB extension activated successfully');
     } catch (error) {
         vscode.window.showErrorMessage(`Failed to activate Simple DB extension: ${error}`);

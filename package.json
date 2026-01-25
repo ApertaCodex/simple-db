@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "2.0.23",
+    "version": "2.0.28",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -35,7 +35,11 @@
         "url": "https://github.com/apertacodex/simple-db"
     },
     "activationEvents": [
-        "*"
+        "onCustomEditor:simpleDB.sqliteEditor",
+        "onView:databaseExplorer",
+        "onCommand:simpleDB.addSQLite",
+        "onCommand:simpleDB.addMongoDB",
+        "onLanguage:sql"
     ],
     "main": "./out/extension.js",
     "contributes": {
@@ -93,11 +97,6 @@
                 "icon": "$(terminal)"
             },
             {
-                "command": "simpleDB.queryTable",
-                "title": "Query Table",
-                "icon": "$(console)"
-            },
-            {
                 "command": "simpleDB.exportToJSON",
                 "title": "Export to JSON",
                 "icon": "$(file-pdf)"
@@ -106,6 +105,16 @@
                 "command": "simpleDB.exportToCSV",
                 "title": "Export to CSV",
                 "icon": "$(file-excel)"
+            },
+            {
+                "command": "simpleDB.importFromJSON",
+                "title": "Import from JSON",
+                "icon": "$(file-add)"
+            },
+            {
+                "command": "simpleDB.importFromCSV",
+                "title": "Import from CSV",
+                "icon": "$(file-add)"
             }
         ],
         "keybindings": [
@@ -172,9 +181,14 @@
                     "group": "inline"
                 },
                 {
-                    "command": "simpleDB.queryTable",
-                    "when": "view == databaseExplorer && viewItem == table",
-                    "group": "inline"
+                    "command": "simpleDB.importFromJSON",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "import"
+                },
+                {
+                    "command": "simpleDB.importFromCSV",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "import"
                 },
                 {
                     "command": "simpleDB.exportToJSON",
@@ -190,11 +204,32 @@
             "explorer/context": [
                 {
                     "command": "simpleDB.openSQLiteFile",
-                    "when": "resourceExtname == .db || resourceExtname == .sqlite || resourceExtname == .sqlite3",
+                    "when": "resourceExtname == .db || resourceExtname == .sqlite || resourceExtname == .sqlite3 || resourceExtname == .db3",
                     "group": "database"
                 }
             ]
         },
+        "customEditors": [
+            {
+                "viewType": "simpleDB.sqliteEditor",
+                "displayName": "SQLite Database",
+                "selector": [
+                    {
+                        "filenamePattern": "*.db"
+                    },
+                    {
+                        "filenamePattern": "*.sqlite"
+                    },
+                    {
+                        "filenamePattern": "*.sqlite3"
+                    },
+                    {
+                        "filenamePattern": "*.db3"
+                    }
+                ],
+                "priority": "option"
+            }
+        ],
         "configuration": {
             "title": "Simple DB",
             "properties": {
@@ -234,6 +269,14 @@
                     "default": "",
                     "description": "OpenAI API key for AI query generation (can also be set via OPENAI_API_KEY environment variable)"
                 }
+            }
+        },
+        "configurationDefaults": {
+            "workbench.editorAssociations": {
+                "*.db": "simpleDB.sqliteEditor",
+                "*.sqlite": "simpleDB.sqliteEditor",
+                "*.sqlite3": "simpleDB.sqliteEditor",
+                "*.db3": "simpleDB.sqliteEditor"
             }
         }
     },
