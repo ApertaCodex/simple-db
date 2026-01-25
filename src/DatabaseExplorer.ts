@@ -58,14 +58,17 @@ class DatabaseTreeItem extends vscode.TreeItem {
         }
         this.contextValue = contextValue;
 
-        // Show record count on the right side of the row
-        if (recordCount !== undefined) {
-            this.description = `${recordCount.toLocaleString()} rows`;
-        }
-
         if (contextValue === 'connection' && connection) {
             this.iconPath = new vscode.ThemeIcon(connection.type === 'sqlite' ? 'database' : 'server');
+            // Show table count for database connections
+            if (connection.tables && connection.tables.length > 0) {
+                this.description = `${connection.tables.length} ${connection.tables.length === 1 ? 'table' : 'tables'}`;
+            }
         } else if (contextValue === 'table') {
+            // Show record count on the right side of the row
+            if (recordCount !== undefined) {
+                this.description = `${recordCount.toLocaleString()} rows`;
+            }
             this.iconPath = new vscode.ThemeIcon('table');
             // Auto-open table data on click
             this.command = {
@@ -272,7 +275,7 @@ export class DatabaseExplorer {
 
             panel.webview.onDidReceiveMessage(
                 async message => {
-                    if (message.command === 'export') {
+                    if (message.command === 'exportCSV') {
                         try {
                             const uri = await vscode.window.showSaveDialog({
                                 defaultUri: vscode.Uri.file(message.filename || 'export.csv'),
@@ -281,7 +284,37 @@ export class DatabaseExplorer {
 
                             if (uri) {
                                 await vscode.workspace.fs.writeFile(uri, Buffer.from(message.data, 'utf8'));
-                                vscode.window.showInformationMessage(`Data exported to ${uri.fsPath}`);
+                                const openAction = 'Open File';
+                                const result = await vscode.window.showInformationMessage(
+                                    `Exported to ${uri.fsPath}`,
+                                    openAction
+                                );
+                                if (result === openAction) {
+                                    const document = await vscode.workspace.openTextDocument(uri.fsPath);
+                                    await vscode.window.showTextDocument(document);
+                                }
+                            }
+                        } catch (error) {
+                            vscode.window.showErrorMessage(`Export failed: ${error}`);
+                        }
+                    } else if (message.command === 'exportJSON') {
+                        try {
+                            const uri = await vscode.window.showSaveDialog({
+                                defaultUri: vscode.Uri.file(message.filename || 'export.json'),
+                                filters: { 'JSON Files': ['json'] }
+                            });
+
+                            if (uri) {
+                                await vscode.workspace.fs.writeFile(uri, Buffer.from(message.data, 'utf8'));
+                                const openAction = 'Open File';
+                                const result = await vscode.window.showInformationMessage(
+                                    `Exported to ${uri.fsPath}`,
+                                    openAction
+                                );
+                                if (result === openAction) {
+                                    const document = await vscode.workspace.openTextDocument(uri.fsPath);
+                                    await vscode.window.showTextDocument(document);
+                                }
                             }
                         } catch (error) {
                             vscode.window.showErrorMessage(`Export failed: ${error}`);
@@ -450,11 +483,6 @@ export class DatabaseExplorer {
         const connection = item.connection;
 
         try {
-            if (connection.type !== 'sqlite') {
-                vscode.window.showErrorMessage('JSON export is currently only supported for SQLite databases');
-                return;
-            }
-
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
 
             const uri = await vscode.window.showSaveDialog({
@@ -467,11 +495,19 @@ export class DatabaseExplorer {
                 return; // User cancelled
             }
 
-            const outputPath = await this.sqliteManager.exportToJSON(connection.path, tableName, uri.fsPath, data);
+            let outputPath: string;
+            if (connection.type === 'sqlite') {
+                outputPath = await this.sqliteManager.exportToJSON(connection.path, tableName, uri.fsPath, data);
+            } else if (connection.type === 'mongodb') {
+                outputPath = await this.mongoManager.exportToJSON(connection.path, tableName, uri.fsPath, data);
+            } else {
+                vscode.window.showErrorMessage('Unsupported database type');
+                return;
+            }
 
             const openAction = 'Open File';
             const result = await vscode.window.showInformationMessage(
-                `Exported ${data ? data.length + ' rows' : 'table'} to: ${outputPath}`,
+                `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`,
                 openAction
             );
 
@@ -493,11 +529,6 @@ export class DatabaseExplorer {
         const connection = item.connection;
 
         try {
-            if (connection.type !== 'sqlite') {
-                vscode.window.showErrorMessage('CSV export is currently only supported for SQLite databases');
-                return;
-            }
-
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
 
             const uri = await vscode.window.showSaveDialog({
@@ -510,11 +541,19 @@ export class DatabaseExplorer {
                 return; // User cancelled
             }
 
-            const outputPath = await this.sqliteManager.exportToCSV(connection.path, tableName, uri.fsPath, data);
+            let outputPath: string;
+            if (connection.type === 'sqlite') {
+                outputPath = await this.sqliteManager.exportToCSV(connection.path, tableName, uri.fsPath, data);
+            } else if (connection.type === 'mongodb') {
+                outputPath = await this.mongoManager.exportToCSV(connection.path, tableName, uri.fsPath, data);
+            } else {
+                vscode.window.showErrorMessage('Unsupported database type');
+                return;
+            }
 
             const openAction = 'Open File';
             const result = await vscode.window.showInformationMessage(
-                `Exported ${data ? data.length + ' rows' : 'table'} to: ${outputPath}`,
+                `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`,
                 openAction
             );
 
@@ -1544,8 +1583,11 @@ Rules:
             <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="toggleColumnManager(event)">
                 <span class="material-symbols-outlined text-lg">view_column</span> Columns
             </button>
-            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="exportData()">
-                <span class="material-symbols-outlined text-lg">download</span> Export
+            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="exportToCSV()">
+                <span class="material-symbols-outlined text-lg">description</span> CSV
+            </button>
+            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="exportToJSON()">
+                <span class="material-symbols-outlined text-lg">code</span> JSON
             </button>
             <button class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800" onclick="toggleTheme()">
                 <span class="material-symbols-outlined" id="themeIcon">dark_mode</span>
@@ -2022,18 +2064,37 @@ Rules:
             document.getElementById('queryInput').value = '';
         }
 
-        function exportData() {
+        function exportToCSV() {
             if (filteredData.length === 0) return alert('No data to export');
             const header = visibleColumns.join(',');
-            const rows = filteredData.map(row => 
+            const rows = filteredData.map(row =>
                 visibleColumns.map(col => \`"\${String(row[col] || '').replace(/"/g, '""')}"\`).join(',')
             ).join('\\n');
             const csv = header + '\\n' + rows;
-            
+
             vscode.postMessage({
-                command: 'export',
+                command: 'exportCSV',
                 data: csv,
-                filename: '${tableName}_export.csv'
+                filename: '${tableName}.csv'
+            });
+        }
+
+        function exportToJSON() {
+            if (filteredData.length === 0) return alert('No data to export');
+
+            // Export filtered data with visible columns only
+            const exportData = filteredData.map(row => {
+                const obj = {};
+                visibleColumns.forEach(col => {
+                    obj[col] = row[col];
+                });
+                return obj;
+            });
+
+            vscode.postMessage({
+                command: 'exportJSON',
+                data: JSON.stringify(exportData, null, 2),
+                filename: '${tableName}.json'
             });
         }
 

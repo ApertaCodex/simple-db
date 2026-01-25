@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { logger } from './logger';
+import * as fs from 'fs';
 
 export class MongoDBManager {
     async getCollections(connectionString: string): Promise<string[]> {
@@ -71,5 +72,88 @@ export class MongoDBManager {
         } finally {
             await connection.close();
         }
+    }
+
+    async exportToJSON(connectionString: string, collectionName: string, outputPath: string, data?: any[]): Promise<string> {
+        try {
+            const exportData = data ?? await this.getCollectionData(connectionString, collectionName);
+            const jsonData = JSON.stringify(exportData, null, 2);
+            await fs.promises.writeFile(outputPath, jsonData, 'utf8');
+            logger.info(`Exported ${exportData.length} documents from ${collectionName} to ${outputPath}`);
+            return outputPath;
+        } catch (error) {
+            logger.error(`Failed to export collection ${collectionName} to JSON`, error);
+            throw new Error(`Failed to export collection ${collectionName} to JSON: ${error}`);
+        }
+    }
+
+    async exportToCSV(connectionString: string, collectionName: string, outputPath: string, data?: any[]): Promise<string> {
+        try {
+            const exportData = data ?? await this.getCollectionData(connectionString, collectionName);
+
+            if (exportData.length === 0) {
+                throw new Error(`No data to export`);
+            }
+
+            // Flatten nested objects and arrays for CSV
+            const flattenedData = exportData.map(doc => this.flattenObject(doc));
+
+            // Get all unique keys from all documents
+            const allKeys = new Set<string>();
+            flattenedData.forEach(doc => {
+                Object.keys(doc).forEach(key => allKeys.add(key));
+            });
+
+            const headers = Array.from(allKeys);
+            const csvRows = [headers.join(',')];
+
+            for (const row of flattenedData) {
+                const values = headers.map(header => {
+                    const value = row[header];
+                    if (value === null || value === undefined) {
+                        return '';
+                    }
+                    const stringValue = String(value);
+                    if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+                        return `"${stringValue.replace(/"/g, '""')}"`;
+                    }
+                    return stringValue;
+                });
+                csvRows.push(values.join(','));
+            }
+
+            const csvData = csvRows.join('\n');
+            await fs.promises.writeFile(outputPath, csvData, 'utf8');
+            logger.info(`Exported ${exportData.length} documents from ${collectionName} to ${outputPath}`);
+            return outputPath;
+        } catch (error) {
+            logger.error(`Failed to export collection ${collectionName} to CSV`, error);
+            throw new Error(`Failed to export collection ${collectionName} to CSV: ${error}`);
+        }
+    }
+
+    private flattenObject(obj: any, prefix: string = ''): any {
+        const flattened: any = {};
+
+        for (const key in obj) {
+            if (!obj.hasOwnProperty(key)) continue;
+
+            const value = obj[key];
+            const newKey = prefix ? `${prefix}.${key}` : key;
+
+            if (value === null || value === undefined) {
+                flattened[newKey] = value;
+            } else if (typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+                // Recursively flatten nested objects
+                Object.assign(flattened, this.flattenObject(value, newKey));
+            } else if (Array.isArray(value)) {
+                // Convert arrays to JSON strings
+                flattened[newKey] = JSON.stringify(value);
+            } else {
+                flattened[newKey] = value;
+            }
+        }
+
+        return flattened;
     }
 }

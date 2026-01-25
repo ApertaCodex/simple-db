@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "2.0.28",
+    "version": "2.0.36",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -58,7 +58,7 @@
                 {
                     "id": "simple-db",
                     "title": "Simple DB",
-                    "icon": "$(database)"
+                    "icon": "menu.svg"
                 }
             ]
         },
@@ -99,12 +99,12 @@
             {
                 "command": "simpleDB.exportToJSON",
                 "title": "Export to JSON",
-                "icon": "$(file-pdf)"
+                "icon": "$(json)"
             },
             {
                 "command": "simpleDB.exportToCSV",
                 "title": "Export to CSV",
-                "icon": "$(file-excel)"
+                "icon": "$(table)"
             },
             {
                 "command": "simpleDB.importFromJSON",
