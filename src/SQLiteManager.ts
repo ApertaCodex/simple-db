@@ -1,10 +1,31 @@
-import * as sqlite3 from '@vscode/sqlite3';
 import * as fs from 'fs';
 import { logger } from './logger';
+
+// Lazy-loaded sqlite3 module to prevent extension activation failures
+let sqlite3Module: typeof import('@vscode/sqlite3') | null = null;
+let sqlite3LoadError: Error | null = null;
+
+async function getSqlite3() {
+    if (sqlite3LoadError) {
+        throw sqlite3LoadError;
+    }
+    if (!sqlite3Module) {
+        try {
+            sqlite3Module = await import('@vscode/sqlite3');
+            logger.info('SQLite3 module loaded successfully');
+        } catch (error) {
+            sqlite3LoadError = error instanceof Error ? error : new Error(String(error));
+            logger.error('Failed to load SQLite3 module', sqlite3LoadError);
+            throw new Error(`Failed to load SQLite3 native module: ${sqlite3LoadError.message}. Please check the extension logs for details.`);
+        }
+    }
+    return sqlite3Module;
+}
 
 export class SQLiteManager {
     async getTables(dbPath: string): Promise<string[]> {
         logger.debug(`Getting tables from SQLite database: ${dbPath}`);
+        const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
                 if (err) reject(err);
@@ -25,6 +46,7 @@ export class SQLiteManager {
     }
 
     async getTableData(dbPath: string, tableName: string, limit?: number, offset?: number): Promise<any[]> {
+        const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
                 if (err) reject(err);
@@ -56,6 +78,7 @@ export class SQLiteManager {
     }
 
     async getTableRowCount(dbPath: string, tableName: string): Promise<number> {
+        const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
                 if (err) reject(err);
@@ -73,6 +96,7 @@ export class SQLiteManager {
     }
 
     async executeQuery(dbPath: string, query: string): Promise<any[]> {
+        const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
                 if (err) reject(err);
@@ -244,6 +268,7 @@ export class SQLiteManager {
     }
 
     private async importData(dbPath: string, tableName: string, data: any[]): Promise<number> {
+        const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
                 if (err) reject(err);
