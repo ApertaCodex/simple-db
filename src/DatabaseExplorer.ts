@@ -310,15 +310,10 @@ export class DatabaseExplorer {
 
                             if (uri) {
                                 await vscode.workspace.fs.writeFile(uri, Buffer.from(message.data, 'utf8'));
-                                const openAction = 'Open File';
-                                const result = await vscode.window.showInformationMessage(
-                                    `Exported to ${uri.fsPath}`,
-                                    openAction
-                                );
-                                if (result === openAction) {
-                                    const document = await vscode.workspace.openTextDocument(uri.fsPath);
-                                    await vscode.window.showTextDocument(document);
-                                }
+                                vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`);
+                                // Automatically open the file in the IDE
+                                const document = await vscode.workspace.openTextDocument(uri.fsPath);
+                                await vscode.window.showTextDocument(document);
                             }
                         } catch (error) {
                             vscode.window.showErrorMessage(`Export failed: ${error}`);
@@ -332,15 +327,10 @@ export class DatabaseExplorer {
 
                             if (uri) {
                                 await vscode.workspace.fs.writeFile(uri, Buffer.from(message.data, 'utf8'));
-                                const openAction = 'Open File';
-                                const result = await vscode.window.showInformationMessage(
-                                    `Exported to ${uri.fsPath}`,
-                                    openAction
-                                );
-                                if (result === openAction) {
-                                    const document = await vscode.workspace.openTextDocument(uri.fsPath);
-                                    await vscode.window.showTextDocument(document);
-                                }
+                                vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`);
+                                // Automatically open the file in the IDE
+                                const document = await vscode.workspace.openTextDocument(uri.fsPath);
+                                await vscode.window.showTextDocument(document);
                             }
                         } catch (error) {
                             vscode.window.showErrorMessage(`Export failed: ${error}`);
@@ -544,9 +534,10 @@ export class DatabaseExplorer {
 
         try {
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
+            const timestamp = Math.floor(Date.now() / 1000);
 
             const uri = await vscode.window.showSaveDialog({
-                defaultUri: vscode.Uri.file(`${tableName}.json`),
+                defaultUri: vscode.Uri.file(`${tableName}_${timestamp}.json`),
                 filters: { 'JSON Files': ['json'] },
                 title: 'Export to JSON'
             });
@@ -565,16 +556,13 @@ export class DatabaseExplorer {
                 return;
             }
 
-            const openAction = 'Open File';
-            const result = await vscode.window.showInformationMessage(
-                `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`,
-                openAction
+            vscode.window.showInformationMessage(
+                `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`
             );
 
-            if (result === openAction) {
-                const document = await vscode.workspace.openTextDocument(outputPath);
-                await vscode.window.showTextDocument(document);
-            }
+            // Automatically open the file in the IDE
+            const document = await vscode.workspace.openTextDocument(outputPath);
+            await vscode.window.showTextDocument(document);
         } catch (error) {
             vscode.window.showErrorMessage(`Export failed: ${error}`);
         }
@@ -590,9 +578,10 @@ export class DatabaseExplorer {
 
         try {
             const tableName = item.label ? (typeof item.label === 'string' ? item.label : item.label.label) : 'unknown';
+            const timestamp = Math.floor(Date.now() / 1000);
 
             const uri = await vscode.window.showSaveDialog({
-                defaultUri: vscode.Uri.file(`${tableName}.csv`),
+                defaultUri: vscode.Uri.file(`${tableName}_${timestamp}.csv`),
                 filters: { 'CSV Files': ['csv'] },
                 title: 'Export to CSV'
             });
@@ -611,16 +600,13 @@ export class DatabaseExplorer {
                 return;
             }
 
-            const openAction = 'Open File';
-            const result = await vscode.window.showInformationMessage(
-                `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`,
-                openAction
+            vscode.window.showInformationMessage(
+                `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`
             );
 
-            if (result === openAction) {
-                const document = await vscode.workspace.openTextDocument(outputPath);
-                await vscode.window.showTextDocument(document);
-            }
+            // Automatically open the file in the IDE
+            const document = await vscode.workspace.openTextDocument(outputPath);
+            await vscode.window.showTextDocument(document);
         } catch (error) {
             vscode.window.showErrorMessage(`Export failed: ${error}`);
         }
@@ -2140,10 +2126,11 @@ Rules:
             ).join('\\n');
             const csv = header + '\\n' + rows;
 
+            const timestamp = Math.floor(Date.now() / 1000);
             vscode.postMessage({
                 command: 'exportCSV',
                 data: csv,
-                filename: '${tableName}.csv'
+                filename: '${tableName}_' + timestamp + '.csv'
             });
         }
 
@@ -2159,10 +2146,11 @@ Rules:
                 return obj;
             });
 
+            const timestamp = Math.floor(Date.now() / 1000);
             vscode.postMessage({
                 command: 'exportJSON',
                 data: JSON.stringify(exportData, null, 2),
-                filename: '${tableName}.json'
+                filename: '${tableName}_' + timestamp + '.json'
             });
         }
 

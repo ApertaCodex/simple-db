@@ -429,6 +429,7 @@
         let databases = {}; // { name: { data: u8arr, size: int } }
         let currentDbName = null;
         let currentTableName = null;
+        let totalDatabaseRows = 0; // Total rows in the database table
 
         // Available databases from VS Code extension
         let availableDatabases = window.availableDatabases || [];
@@ -706,7 +707,7 @@
                 allData = window.initialTableData || [];
                 const tableName = window.initialTableName || 'Table';
                 currentTableName = tableName;
-                const totalRows = window.initialTotalRows || 0;
+                totalDatabaseRows = window.initialTotalRows || 0;
                 const injectedDbName = window.initialDatabaseName || null;
                 if (injectedDbName) {
                     currentDbName = injectedDbName;
@@ -730,7 +731,7 @@
                     const emptyStateEl = document.getElementById('emptyState');
                     
                     if (dbNameEl) dbNameEl.textContent = tableName;
-                    if (dbMetaEl) dbMetaEl.textContent = `${totalRows} total records`;
+                    if (dbMetaEl) dbMetaEl.textContent = `${totalDatabaseRows} total records`;
                     if (emptyStateEl) emptyStateEl.classList.add('hidden');
                     
                     console.log('Empty state hidden, showing table');
@@ -873,6 +874,17 @@
                             columns = colRes[0].values.map(r => r[1]);
                             allData = [];
                         }
+
+                        // Get total row count for the table
+                        try {
+                            const countRes = db.exec(`SELECT COUNT(*) as count FROM "${tableName}"`);
+                            if (countRes.length > 0 && countRes[0].values.length > 0) {
+                                totalDatabaseRows = countRes[0].values[0][0];
+                            }
+                        } catch (e) {
+                            totalDatabaseRows = allData.length;
+                        }
+
                         restoreTableState(tableName, getActiveDbName());
                         localStorage.setItem(CACHE_KEYS.CURRENT_TABLE, JSON.stringify(tableName));
                         saveToCache();
@@ -1202,6 +1214,7 @@
                         allData = res[0].values.map(row => {
                             let obj = {}; columns.forEach((c, i) => obj[c] = row[i]); return obj;
                         });
+                        totalDatabaseRows = allData.length;
                         filteredData = [...allData];
                         visibleColumns = [...columns];
                         analyzeColumns();
@@ -1250,11 +1263,28 @@
         function initTable() {
             renderHeader();
             renderBody();
+            syncRowsPerPageDropdown();
+        }
+
+        function syncRowsPerPageDropdown() {
+            const dropdown = document.getElementById('rowsPerPage');
+            if (dropdown) {
+                dropdown.value = state.rowsPerPage.toString();
+            }
         }
 
         function renderHeader() {
             const tr = document.getElementById('tableHeaderRow');
-            tr.innerHTML = visibleColumns.map((col) => {
+
+            // Add index column header
+            const indexHeader = `
+                <th class="px-6 py-3 border-b border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-900 sticky left-0 z-10">
+                    <div class="flex items-center justify-between">
+                        <span class="whitespace-nowrap text-gray-600 dark:text-zinc-400 font-medium text-xs">#</span>
+                    </div>
+                </th>`;
+
+            tr.innerHTML = indexHeader + visibleColumns.map((col) => {
                 const sortIndex = sortConfig.findIndex(s => s.col === col);
                 const isSorted = sortIndex !== -1;
                 const sortDir = isSorted ? sortConfig[sortIndex].dir : null;
@@ -1286,16 +1316,29 @@
         function renderBody() {
             const tbody = document.getElementById('tableBody');
             if (filteredData.length === 0) {
-                tbody.innerHTML = db ? `<tr><td colspan="${visibleColumns.length}" class="px-6 py-12 text-center text-gray-400 dark:text-zinc-500 italic">No records found matching your filters.</td></tr>` : '';
+                tbody.innerHTML = db ? `<tr><td colspan="${visibleColumns.length + 1}" class="px-6 py-12 text-center text-gray-400 dark:text-zinc-500 italic">No records found matching your filters.</td></tr>` : '';
                 return;
             }
 
-            const start = (state.currentPage - 1) * state.rowsPerPage;
-            const end = start + state.rowsPerPage;
-            const pageData = filteredData.slice(start, end);
+            // In VS Code webview mode, filteredData already contains only the current page
+            // In standalone mode, we need to slice filteredData to get the current page
+            let pageData;
+            let startIndex;
+            if (isVSCodeWebview) {
+                pageData = filteredData;
+                startIndex = (state.currentPage - 1) * state.rowsPerPage;
+            } else {
+                const start = (state.currentPage - 1) * state.rowsPerPage;
+                const end = start + state.rowsPerPage;
+                pageData = filteredData.slice(start, end);
+                startIndex = start;
+            }
 
-            tbody.innerHTML = pageData.map((row) => `
+            tbody.innerHTML = pageData.map((row, idx) => {
+                const rowIndex = startIndex + idx + 1;
+                return `
                 <tr class="hover:bg-blue-50/50 dark:hover:bg-zinc-800/50 transition-colors group border-b border-gray-100 dark:border-zinc-800 last:border-0">
+                    <td class="px-6 py-3 whitespace-nowrap text-xs font-medium text-gray-500 dark:text-zinc-500 sticky left-0 bg-white dark:bg-zinc-900 group-hover:bg-blue-50/50 dark:group-hover:bg-zinc-800/50">${rowIndex}</td>
                     ${visibleColumns.map(col => {
                 const val = row[col];
                 let content = val;
@@ -1318,7 +1361,8 @@
                 return `<td class="px-6 py-3 whitespace-nowrap ${cls}">${content}</td>`;
             }).join('')}
                 </tr>
-            `).join('');
+            `;
+            }).join('');
         }
 
         // --- 8. Data Operations (Filter/Sort/Paginate) ---
@@ -1386,17 +1430,64 @@
             if (badge) Object.keys(state.columnFilters).length > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden');
         }
 
-        function updateTotalCount() { document.getElementById('totalRecords').textContent = `${filteredData.length} Records`; }
+        function updateTotalCount() { document.getElementById('totalRecords').textContent = `${totalDatabaseRows} Records`; }
         function renderPagination() {
-            const totalPages = Math.ceil(filteredData.length / state.rowsPerPage) || 1;
+            // In VS Code webview mode, use totalDatabaseRows for pagination
+            // In standalone mode, use filteredData.length (which includes all data)
+            const dataCount = (isVSCodeWebview && totalDatabaseRows > 0) ? totalDatabaseRows : filteredData.length;
+            const totalPages = Math.ceil(dataCount / state.rowsPerPage) || 1;
             document.getElementById('pageInfo').textContent = `Page ${state.currentPage} of ${totalPages}`;
             document.getElementById('btnPrev').disabled = state.currentPage === 1;
             document.getElementById('btnNext').disabled = state.currentPage === totalPages;
         }
 
-        function nextPage() { if (state.currentPage < Math.ceil(filteredData.length / state.rowsPerPage)) { state.currentPage++; updateUI(); saveToCache(); } }
-        function prevPage() { if (state.currentPage > 1) { state.currentPage--; updateUI(); saveToCache(); } }
-        function changeRowsPerPage(val) { state.rowsPerPage = parseInt(val); state.currentPage = 1; updateUI(); saveToCache(); }
+        function nextPage() {
+            const dataCount = (isVSCodeWebview && totalDatabaseRows > 0) ? totalDatabaseRows : filteredData.length;
+            if (state.currentPage < Math.ceil(dataCount / state.rowsPerPage)) {
+                state.currentPage++;
+                if (isVSCodeWebview && vscode) {
+                    requestPage(state.currentPage, state.rowsPerPage);
+                } else {
+                    updateUI();
+                    saveToCache();
+                }
+            }
+        }
+        function prevPage() {
+            if (state.currentPage > 1) {
+                state.currentPage--;
+                if (isVSCodeWebview && vscode) {
+                    requestPage(state.currentPage, state.rowsPerPage);
+                } else {
+                    updateUI();
+                    saveToCache();
+                }
+            }
+        }
+        function changeRowsPerPage(val) {
+            state.rowsPerPage = parseInt(val);
+            state.currentPage = 1;
+            if (isVSCodeWebview && vscode) {
+                // Request new page with updated page size from VS Code extension
+                requestPage(1, state.rowsPerPage);
+            } else {
+                updateUI();
+                saveToCache();
+            }
+        }
+        function requestPage(page, pageSize) {
+            if (vscode) {
+                document.getElementById('loadingOverlay')?.classList.remove('hidden');
+                vscode.postMessage({
+                    command: 'loadPage',
+                    page: page,
+                    pageSize: pageSize,
+                    database: currentDbName,
+                    table: currentTableName
+                });
+                saveToCache();
+            }
+        }
         function formatColumnName(col) { return col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); }
 
         // --- 9. Popovers & UI State ---
@@ -1553,6 +1644,7 @@
                     case 'queryResult':
                         if (message.data && message.data.length > 0) {
                             allData = message.data;
+                            totalDatabaseRows = message.data.length;
                             columns = Object.keys(message.data[0]);
                             visibleColumns = [...columns];
                             analyzeColumns();
@@ -1598,6 +1690,15 @@
                     case 'pageData':
                         // Handle pagination data from extension
                         allData = message.data || [];
+                        if (message.totalRows !== undefined) {
+                            totalDatabaseRows = message.totalRows;
+                        }
+                        if (message.page !== undefined) {
+                            state.currentPage = message.page;
+                        }
+                        if (message.pageSize !== undefined) {
+                            state.rowsPerPage = message.pageSize;
+                        }
                         if (allData.length > 0) {
                             columns = Object.keys(allData[0]);
                             if (visibleColumns.length === 0) {
@@ -1607,12 +1708,19 @@
                             processData();
                             initTable();
                         }
+                        document.getElementById('loadingOverlay')?.classList.add('hidden');
+                        break;
+
+                    case 'pageError':
+                        document.getElementById('loadingOverlay')?.classList.add('hidden');
+                        alert('Error loading page: ' + (message.error || 'Unknown error'));
                         break;
                         
                     case 'tableData':
                         // Handle table data load from extension
                         allData = message.data || [];
                         currentTableName = message.table;
+                        totalDatabaseRows = message.totalRows || allData.length;
                         if (message.database) {
                             currentDbName = message.database;
                             const dbSelect = document.getElementById('databaseSelect');
@@ -1626,10 +1734,10 @@
                             state.columnFilters = {};
                             sortConfig = [];
                             visibleColumns = [...columns];
-                            
+
                             // Update UI
                             document.getElementById('dbName').textContent = message.table;
-                            document.getElementById('dbMeta').textContent = `${message.totalRows || allData.length} total records`;
+                            document.getElementById('dbMeta').textContent = `${totalDatabaseRows} total records`;
                             
                             // Update table selector
                             const tableSelect = document.getElementById('tableSelect');
