@@ -81,15 +81,41 @@ class DatabaseTreeItem extends vscode.TreeItem {
 }
 
 
+interface TableSettings {
+    visibleColumns: string[];
+    columnFilters: { [column: string]: { op: string; value: string; value2?: string } };
+    sortConfig: { column: string; direction: 'asc' | 'desc' }[];
+}
+
 export class DatabaseExplorer {
     connections: DatabaseItem[] = [];
     private _disposables: vscode.Disposable[] = [];
     private _treeDataProvider: DatabaseTreeDataProvider;
     private readonly defaultPageSize = 20;
+    private readonly TABLE_SETTINGS_KEY = 'simpleDB.tableSettings';
 
-    constructor(public sqliteManager: SQLiteManager, public mongoManager: MongoDBManager) {
+    constructor(
+        public sqliteManager: SQLiteManager,
+        public mongoManager: MongoDBManager,
+        private context: vscode.ExtensionContext
+    ) {
         this._treeDataProvider = new DatabaseTreeDataProvider(this);
         this.loadConnections();
+    }
+
+    // Save table settings to extension cache (globalState)
+    saveTableSettings(databaseName: string, tableName: string, settings: TableSettings): void {
+        const allSettings = this.context.globalState.get<{ [key: string]: TableSettings }>(this.TABLE_SETTINGS_KEY) || {};
+        const key = `${databaseName}:${tableName}`;
+        allSettings[key] = settings;
+        this.context.globalState.update(this.TABLE_SETTINGS_KEY, allSettings);
+    }
+
+    // Load table settings from extension cache (globalState)
+    getTableSettings(databaseName: string, tableName: string): TableSettings | undefined {
+        const allSettings = this.context.globalState.get<{ [key: string]: TableSettings }>(this.TABLE_SETTINGS_KEY) || {};
+        const key = `${databaseName}:${tableName}`;
+        return allSettings[key];
     }
 
     getProvider() {
@@ -259,7 +285,7 @@ export class DatabaseExplorer {
                 ]);
             }
 
-            const panel = this.showDataGrid(data, item.tableName, totalRows, pageSize, connection.type);
+            const panel = this.showDataGrid(data, item.tableName, totalRows, pageSize, connection.type, connection.name);
 
             // Send database list and selection to webview
             panel.webview.postMessage({
@@ -420,25 +446,59 @@ export class DatabaseExplorer {
                                 });
                                 return;
                             }
-                            
-                            const tableData = await (dbConnection.type === 'sqlite' 
+
+                            const tableData = await (dbConnection.type === 'sqlite'
                                 ? this.sqliteManager.getTableData(dbConnection.path, message.table, pageSize, 0)
                                 : this.mongoManager.getCollectionData(dbConnection.path, message.table, pageSize, 0));
-                            
+
                             const tableRowCount = await (dbConnection.type === 'sqlite'
                                 ? this.sqliteManager.getTableRowCount(dbConnection.path, message.table)
                                 : this.mongoManager.getCollectionCount(dbConnection.path, message.table));
-                            
+
                             panel.webview.postMessage({
                                 command: 'tableData',
                                 data: tableData,
                                 table: message.table,
-                                totalRows: tableRowCount
+                                totalRows: tableRowCount,
+                                database: message.database
                             });
                         } catch (error) {
                             panel.webview.postMessage({
                                 command: 'queryError',
                                 error: error instanceof Error ? error.message : String(error)
+                            });
+                        }
+                    } else if (message.command === 'saveTableSettings') {
+                        // Save table settings to extension cache
+                        try {
+                            this.saveTableSettings(
+                                message.database,
+                                message.table,
+                                {
+                                    visibleColumns: message.visibleColumns,
+                                    columnFilters: message.columnFilters,
+                                    sortConfig: message.sortConfig
+                                }
+                            );
+                        } catch (error) {
+                            console.error('Failed to save table settings:', error);
+                        }
+                    } else if (message.command === 'loadTableSettings') {
+                        // Load table settings from extension cache
+                        try {
+                            const settings = this.getTableSettings(message.database, message.table);
+                            panel.webview.postMessage({
+                                command: 'tableSettings',
+                                settings: settings || null,
+                                database: message.database,
+                                table: message.table
+                            });
+                        } catch (error) {
+                            panel.webview.postMessage({
+                                command: 'tableSettings',
+                                settings: null,
+                                database: message.database,
+                                table: message.table
                             });
                         }
                     }
@@ -875,7 +935,14 @@ Rules:
         }
     }
 
-    private showDataGrid(data: any[], tableName: string, totalRows: number, pageSize: number, dbType: 'sqlite' | 'mongodb'): vscode.WebviewPanel {
+    private showDataGrid(
+        data: any[],
+        tableName: string,
+        totalRows: number,
+        pageSize: number,
+        dbType: 'sqlite' | 'mongodb',
+        databaseName: string
+    ): vscode.WebviewPanel {
         const panel = vscode.window.createWebviewPanel(
             'dataGrid',
             `Data: ${tableName}`,
@@ -906,6 +973,7 @@ Rules:
                 console.log('Injecting initial data...');
                 window.initialTableData = ${JSON.stringify(data)};
                 window.initialTableName = ${JSON.stringify(tableName)};
+                window.initialDatabaseName = ${JSON.stringify(databaseName)};
                 window.initialTotalRows = ${totalRows};
                 window.initialPageSize = ${pageSize};
                 window.dbType = ${JSON.stringify(dbType)};

@@ -423,7 +423,7 @@
         let tables = [];
         let currentDbFile = null;
         let suggestedQueries = [];
-        let tableSettings = {}; // { tableName: { visibleColumns, filters, sort, ... } }
+        let tableSettings = {}; // { "db::table": { visibleColumns, filters, sort, ... } }
 
         // Multi-DB State
         let databases = {}; // { name: { data: u8arr, size: int } }
@@ -432,6 +432,7 @@
 
         // Available databases from VS Code extension
         let availableDatabases = window.availableDatabases || [];
+        let pendingTableRender = null; // Track pending table render for settings sync
 
         let state = {
             currentPage: 1,
@@ -440,6 +441,35 @@
             globalSearch: '',
             darkMode: false
         };
+
+        function getActiveDbName() {
+            return currentDbName || (currentDbFile && currentDbFile.name) || null;
+        }
+
+        function getTableSettingsKey(dbName, tableName) {
+            const dbKey = dbName || getActiveDbName();
+            return dbKey ? `${dbKey}::${tableName}` : tableName;
+        }
+
+        function getTableSettings(tableName, dbName) {
+            const key = getTableSettingsKey(dbName, tableName);
+            if (tableSettings[key]) return tableSettings[key];
+            if (key !== tableName && tableSettings[tableName]) {
+                tableSettings[key] = tableSettings[tableName];
+                delete tableSettings[tableName];
+                return tableSettings[key];
+            }
+            return tableSettings[tableName];
+        }
+
+        function setTableSettings(tableName, dbName, settings) {
+            const key = getTableSettingsKey(dbName, tableName);
+            tableSettings[key] = settings;
+            if (key !== tableName && tableSettings[tableName]) {
+                delete tableSettings[tableName];
+            }
+            return key;
+        }
 
         // --- 2. Theme Management ---
         function initTheme() {
@@ -546,14 +576,27 @@
 
         function saveToCache() {
             try {
-                const currentTable = document.getElementById('tableSelect')?.value;
+                const currentTable = document.getElementById('tableSelect')?.value || currentTableName;
+                const activeDbName = getActiveDbName();
                 if (currentTable) {
-                    tableSettings[currentTable] = {
+                    setTableSettings(currentTable, activeDbName, {
                         visibleColumns: visibleColumns,
                         columnStats: columnStats,
                         filters: state.columnFilters,
                         sortConfig: sortConfig
-                    };
+                    });
+
+                    // In VSCode webview mode, save to extension cache
+                    if (isVSCodeWebview && vscode && activeDbName) {
+                        vscode.postMessage({
+                            command: 'saveTableSettings',
+                            database: activeDbName,
+                            table: currentTable,
+                            visibleColumns: visibleColumns,
+                            columnFilters: state.columnFilters,
+                            sortConfig: sortConfig
+                        });
+                    }
                 }
 
                 const cacheData = {
@@ -570,6 +613,17 @@
                     if (value !== null && value !== undefined) localStorage.setItem(key, JSON.stringify(value));
                 });
             } catch (error) { console.warn('Failed to save to cache:', error); }
+        }
+
+        // Request table settings from extension
+        function requestTableSettings(database, table) {
+            if (isVSCodeWebview && vscode && database && table) {
+                vscode.postMessage({
+                    command: 'loadTableSettings',
+                    database: database,
+                    table: table
+                });
+            }
         }
 
         function loadFromCache() {
@@ -653,6 +707,10 @@
                 const tableName = window.initialTableName || 'Table';
                 currentTableName = tableName;
                 const totalRows = window.initialTotalRows || 0;
+                const injectedDbName = window.initialDatabaseName || null;
+                if (injectedDbName) {
+                    currentDbName = injectedDbName;
+                }
                 
                 console.log('Processing data, rows:', allData.length);
                 
@@ -689,9 +747,24 @@
                     
                     // Process and render data
                     analyzeColumns();
-                    processData();
-                    initTable();
-                    populateSampleQueries();
+                    const activeDbName = getActiveDbName();
+                    if (activeDbName) {
+                        requestTableSettings(activeDbName, tableName);
+                        const pendingKey = getTableSettingsKey(activeDbName, tableName);
+                        pendingTableRender = pendingKey;
+                        setTimeout(() => {
+                            if (pendingTableRender === pendingKey) {
+                                processData();
+                                initTable();
+                                populateSampleQueries();
+                                pendingTableRender = null;
+                            }
+                        }, 100);
+                    } else {
+                        processData();
+                        initTable();
+                        populateSampleQueries();
+                    }
                     
                     console.log('Data loaded successfully');
                 } else {
@@ -714,12 +787,16 @@
             ).join('');
             
             // Find and select current database
-            const currentDb = availableDatabases.find(db => 
-                db.tables.includes(currentTableName)
-            );
+            const matchesCurrentTable = (db) => (db.tables || []).some(t => {
+                const tableName = typeof t === 'string' ? t : t.name;
+                return tableName === currentTableName;
+            });
+            const currentDb = currentDbName
+                ? availableDatabases.find(db => db.name === currentDbName)
+                : availableDatabases.find(matchesCurrentTable);
             if (currentDb) {
-                select.value = currentDb.name;
                 currentDbName = currentDb.name;
+                select.value = currentDb.name;
             }
             
             container.classList.remove('hidden');
@@ -752,12 +829,14 @@
             currentDbName = dbName;
             const db = availableDatabases.find(d => d.name === dbName);
             if (db && db.tables.length > 0) {
+                const firstTable = db.tables[0];
+                const firstTableName = typeof firstTable === 'string' ? firstTable : firstTable.name;
                 // Request data for first table of selected database
                 if (vscode) {
                     vscode.postMessage({
                         command: 'loadTable',
                         database: dbName,
-                        table: db.tables[0]
+                        table: firstTableName
                     });
                 }
                 setupTableSelector();
@@ -767,10 +846,11 @@
         function loadTable(tableName) {
             currentTableName = tableName;
             if (isVSCodeWebview && vscode) {
+                const activeDbName = getActiveDbName();
                 // Request table data from VS Code extension
                 vscode.postMessage({
                     command: 'loadTable',
-                    database: currentDbName,
+                    database: activeDbName,
                     table: tableName
                 });
             } else {
@@ -793,7 +873,7 @@
                             columns = colRes[0].values.map(r => r[1]);
                             allData = [];
                         }
-                        restoreTableState(tableName);
+                        restoreTableState(tableName, getActiveDbName());
                         localStorage.setItem(CACHE_KEYS.CURRENT_TABLE, JSON.stringify(tableName));
                         saveToCache();
                         populateSampleQueries();
@@ -942,8 +1022,8 @@
             document.getElementById('tableSelectorContainer').classList.remove('hidden');
         }
 
-        function restoreTableState(tableName) {
-            const settings = tableSettings[tableName];
+        function restoreTableState(tableName, dbName) {
+            const settings = getTableSettings(tableName, dbName);
             if (settings) {
                 visibleColumns = settings.visibleColumns ? settings.visibleColumns.filter(c => columns.includes(c)) : [...columns];
                 if (visibleColumns.length === 0) visibleColumns = [...columns];
@@ -962,7 +1042,13 @@
         async function generateDbAnalysis() {
             if (!tables.length) return;
             const hasQueries = suggestedQueries.length > 0;
-            const allTablesConfigured = tables.every(t => tableSettings[t] && tableSettings[t].visibleColumns);
+            const activeDbName = getActiveDbName();
+            const allTablesConfigured = tables.every(t => {
+                const tableName = typeof t === 'string' ? t : t.name;
+                if (!tableName) return false;
+                const settings = getTableSettings(tableName, activeDbName);
+                return settings && settings.visibleColumns;
+            });
             if (hasQueries && allTablesConfigured) return;
 
             const select = document.getElementById('sampleQueries');
@@ -978,7 +1064,9 @@
                 let ollamaUrl = localStorage.getItem('ollama_url') || 'http://localhost:11434';
                 const currentTable = document.getElementById('tableSelect')?.value;
 
-                for (const tableName of tables) {
+                for (const tableEntry of tables) {
+                    const tableName = typeof tableEntry === 'string' ? tableEntry : tableEntry.name;
+                    if (!tableName) continue;
                     toast.innerHTML = `<span class="material-symbols-outlined mr-2 animate-spin">auto_awesome</span> Analyzing ${tableName}...`;
                     let schemaContext = '';
                     const res = db.exec(`PRAGMA table_info("${tableName}")`);
@@ -1009,10 +1097,11 @@
                             populateSampleQueries();
                         }
                         if (result.columns) {
-                            if (!tableSettings[tableName]) tableSettings[tableName] = {};
-                            if (!tableSettings[tableName].visibleColumns) {
-                                tableSettings[tableName].visibleColumns = result.columns;
-                                if (tableName === currentTable) restoreTableState(tableName);
+                            const existing = getTableSettings(tableName, activeDbName) || {};
+                            if (!existing.visibleColumns) {
+                                existing.visibleColumns = result.columns;
+                                setTableSettings(tableName, activeDbName, existing);
+                                if (tableName === currentTable) restoreTableState(tableName, activeDbName);
                             }
                         }
                         saveToCache();
@@ -1511,7 +1600,9 @@
                         allData = message.data || [];
                         if (allData.length > 0) {
                             columns = Object.keys(allData[0]);
-                            visibleColumns = [...columns];
+                            if (visibleColumns.length === 0) {
+                                visibleColumns = [...columns];
+                            }
                             analyzeColumns();
                             processData();
                             initTable();
@@ -1522,8 +1613,18 @@
                         // Handle table data load from extension
                         allData = message.data || [];
                         currentTableName = message.table;
+                        if (message.database) {
+                            currentDbName = message.database;
+                            const dbSelect = document.getElementById('databaseSelect');
+                            if (dbSelect) {
+                                dbSelect.value = currentDbName;
+                            }
+                        }
                         if (allData.length > 0) {
                             columns = Object.keys(allData[0]);
+                            // Reset filters and sort for new table, settings will override if available
+                            state.columnFilters = {};
+                            sortConfig = [];
                             visibleColumns = [...columns];
                             
                             // Update UI
@@ -1537,9 +1638,18 @@
                             }
                             
                             analyzeColumns();
-                            processData();
-                            initTable();
-                            populateSampleQueries();
+                            // Request saved settings for this table - don't render until we check for settings
+                            requestTableSettings(getActiveDbName(), message.table);
+                            const pendingKey = getTableSettingsKey(getActiveDbName(), message.table);
+                            pendingTableRender = pendingKey;
+                            setTimeout(() => {
+                                if (pendingTableRender === pendingKey) {
+                                    processData();
+                                    initTable();
+                                    populateSampleQueries();
+                                    pendingTableRender = null;
+                                }
+                            }, 100);
                         }
                         break;
                         
@@ -1561,6 +1671,9 @@
                             if (tableSelect) {
                                 tableSelect.value = currentTableName;
                             }
+                            if (getActiveDbName()) {
+                                requestTableSettings(getActiveDbName(), currentTableName);
+                            }
                         }
                         break;
                         
@@ -1568,6 +1681,33 @@
                         // Update databases with row counts
                         availableDatabases = message.databases || [];
                         setupTableSelector();
+                        break;
+
+                    case 'tableSettings':
+                        // Apply settings received from extension cache
+                        if (message.table) {
+                            const settingsDb = message.database || currentDbName;
+                            if (message.settings) {
+                                setTableSettings(message.table, settingsDb, {
+                                    visibleColumns: message.settings.visibleColumns,
+                                    filters: message.settings.columnFilters,
+                                    sortConfig: message.settings.sortConfig
+                                });
+                            }
+
+                            const isCurrentView = message.table === currentTableName && (!settingsDb || settingsDb === currentDbName);
+                            if (isCurrentView && message.settings) {
+                                restoreTableState(message.table, settingsDb);
+                            }
+
+                            const pendingKey = getTableSettingsKey(settingsDb, message.table);
+                            if (pendingTableRender === pendingKey) {
+                                pendingTableRender = null;
+                                processData();
+                                initTable();
+                                populateSampleQueries();
+                            }
+                        }
                         break;
                 }
             });

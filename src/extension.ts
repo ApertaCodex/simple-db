@@ -11,6 +11,7 @@ let sqliteManager: InstanceType<typeof import('./SQLiteManager').SQLiteManager> 
 let mongoManager: InstanceType<typeof import('./MongoDBManager').MongoDBManager> | undefined;
 let databaseExplorer: InstanceType<typeof import('./DatabaseExplorer').DatabaseExplorer> | undefined;
 let treeDataProvider: ReturnType<InstanceType<typeof import('./DatabaseExplorer').DatabaseExplorer>['getProvider']> | undefined;
+let extensionContext: vscode.ExtensionContext;
 
 function getLogger() {
     if (!loggerModule) {
@@ -38,14 +39,19 @@ async function getManagers() {
         mongoManager = new MongoDBManagerModule.MongoDBManager();
     }
     if (!databaseExplorer) {
-        databaseExplorer = new DatabaseExplorerModule.DatabaseExplorer(sqliteManager, mongoManager);
+        databaseExplorer = new DatabaseExplorerModule.DatabaseExplorer(sqliteManager, mongoManager, extensionContext);
         treeDataProvider = databaseExplorer.getProvider();
         vscode.window.registerTreeDataProvider('databaseExplorer', treeDataProvider);
+        // Refresh the tree view after registration to show any loaded connections
+        treeDataProvider.refresh();
     }
     return { sqliteManager, mongoManager, databaseExplorer, treeDataProvider: treeDataProvider! };
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    // Store context for later use
+    extensionContext = context;
+
     // Create a simple output channel for logging even if logger module fails
     const outputChannel = vscode.window.createOutputChannel('Simple DB');
     outputChannel.appendLine(`[${new Date().toISOString()}] Simple DB extension activating...`);
@@ -253,6 +259,11 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
     registerEditor();
+
+    // Initialize the tree view on activation to show any saved connections
+    getManagers().catch(error => {
+        outputChannel.appendLine(`[${new Date().toISOString()}] Tree view init error: ${error}`);
+    });
 
     outputChannel.appendLine(`[${new Date().toISOString()}] Simple DB extension activated successfully`);
 }
