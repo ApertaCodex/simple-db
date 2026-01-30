@@ -22,7 +22,7 @@ export class MongoDBManager {
         }
     }
 
-    async getCollectionData(connectionString: string, collectionName: string, limit: number = 1000, offset: number = 0): Promise<any[]> {
+    async getCollectionData(connectionString: string, collectionName: string, limit: number = 1000, offset: number = 0, sortConfig?: Array<{col: string, dir: 'asc' | 'desc'}>): Promise<any[]> {
         const connection = await mongoose.createConnection(connectionString);
         try {
             await connection.asPromise();
@@ -36,7 +36,18 @@ export class MongoDBManager {
             if (safeLimit === 0) {
                 return [];
             }
-            const data = await collection.find({}).skip(safeOffset).limit(safeLimit).toArray();
+
+            // Build sort object for MongoDB
+            let cursor = collection.find({});
+            if (sortConfig && sortConfig.length > 0) {
+                const sortObj: Record<string, 1 | -1> = {};
+                for (const sort of sortConfig) {
+                    sortObj[sort.col] = sort.dir === 'desc' ? -1 : 1;
+                }
+                cursor = cursor.sort(sortObj);
+            }
+
+            const data = await cursor.skip(safeOffset).limit(safeLimit).toArray();
             return data;
         } finally {
             await connection.close();
@@ -69,6 +80,52 @@ export class MongoDBManager {
             const collection = db.collection(collectionName);
             const data = await collection.find(filter).limit(limit).toArray();
             return data;
+        } finally {
+            await connection.close();
+        }
+    }
+
+    async updateDocument(
+        connectionString: string,
+        collectionName: string,
+        filter: any,
+        update: { [field: string]: any }
+    ): Promise<{ success: boolean; modifiedCount: number }> {
+        const connection = await mongoose.createConnection(connectionString);
+        try {
+            await connection.asPromise();
+            const db = connection.db;
+            if (!db) {
+                logger.error('Database connection not established');
+                throw new Error('Database connection not established');
+            }
+
+            if (!filter || Object.keys(filter).length === 0) {
+                throw new Error('Filter is required for safety - cannot update all documents');
+            }
+
+            if (!update || Object.keys(update).length === 0) {
+                throw new Error('No fields to update');
+            }
+
+            const collection = db.collection(collectionName);
+            
+            // Use $set operator to update specific fields
+            const updateOperation = { $set: update };
+            
+            logger.info(`Updating document in ${collectionName}`, { filter, update: updateOperation });
+            
+            const result = await collection.updateOne(filter, updateOperation);
+            
+            logger.info(`Modified ${result.modifiedCount} document(s) in ${collectionName}`);
+            
+            return {
+                success: true,
+                modifiedCount: result.modifiedCount
+            };
+        } catch (error) {
+            logger.error(`Failed to update document in ${collectionName}`, error);
+            throw error;
         } finally {
             await connection.close();
         }

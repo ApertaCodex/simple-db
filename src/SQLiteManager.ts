@@ -45,7 +45,7 @@ export class SQLiteManager {
         });
     }
 
-    async getTableData(dbPath: string, tableName: string, limit?: number, offset?: number): Promise<any[]> {
+    async getTableData(dbPath: string, tableName: string, limit?: number, offset?: number, sortConfig?: Array<{col: string, dir: 'asc' | 'desc'}>): Promise<any[]> {
         const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
@@ -58,7 +58,19 @@ export class SQLiteManager {
             const normalizedOffset = typeof offset === 'number' && Number.isFinite(offset)
                 ? Math.max(0, Math.floor(offset))
                 : 0;
-            let query = `SELECT * FROM ${tableName}`;
+            let query = `SELECT * FROM "${tableName}"`;
+
+            // Add ORDER BY clause if sortConfig is provided
+            if (sortConfig && sortConfig.length > 0) {
+                const orderClauses = sortConfig.map(sort => {
+                    // Sanitize column name to prevent SQL injection
+                    const safeCol = sort.col.replace(/"/g, '""');
+                    const direction = sort.dir === 'desc' ? 'DESC' : 'ASC';
+                    return `"${safeCol}" ${direction}`;
+                });
+                query += ` ORDER BY ${orderClauses.join(', ')}`;
+            }
+
             if (normalizedLimit !== undefined) {
                 query += ` LIMIT ${normalizedLimit}`;
                 if (normalizedOffset > 0) {
@@ -109,6 +121,113 @@ export class SQLiteManager {
                     resolve(rows);
                 }
                 db.close();
+            });
+        });
+    }
+
+    async getTablePrimaryKeys(dbPath: string, tableName: string): Promise<string[]> {
+        const sqlite3 = await getSqlite3();
+        return new Promise((resolve, reject) => {
+            const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+                if (err) reject(err);
+            });
+
+            db.all(`PRAGMA table_info("${tableName}")`, [], (err, rows: any[]) => {
+                if (err) {
+                    logger.error(`Failed to get table info for ${tableName}`, err);
+                    db.close();
+                    reject(err);
+                } else {
+                    const primaryKeys = rows.filter(row => row.pk > 0).map(row => row.name);
+                    logger.debug(`Primary keys for ${tableName}: ${primaryKeys.join(', ')}`);
+                    db.close();
+                    resolve(primaryKeys);
+                }
+            });
+        });
+    }
+
+    async getColumnInfo(dbPath: string, tableName: string): Promise<Array<{ name: string; type: string; notnull: boolean; pk: boolean }>> {
+        const sqlite3 = await getSqlite3();
+        return new Promise((resolve, reject) => {
+            const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+                if (err) reject(err);
+            });
+
+            db.all(`PRAGMA table_info("${tableName}")`, [], (err, rows: any[]) => {
+                if (err) {
+                    logger.error(`Failed to get column info for ${tableName}`, err);
+                    db.close();
+                    reject(err);
+                } else {
+                    const columns = rows.map(row => ({
+                        name: row.name,
+                        type: row.type,
+                        notnull: row.notnull === 1,
+                        pk: row.pk > 0
+                    }));
+                    logger.debug(`Column info for ${tableName}: ${columns.length} columns`);
+                    db.close();
+                    resolve(columns);
+                }
+            });
+        });
+    }
+
+    async updateRecord(
+        dbPath: string,
+        tableName: string,
+        whereClause: { [column: string]: any },
+        updates: { [column: string]: any }
+    ): Promise<{ success: boolean; rowsAffected: number }> {
+        const sqlite3 = await getSqlite3();
+        return new Promise((resolve, reject) => {
+            const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => {
+                if (err) {
+                    logger.error(`Failed to open database for update: ${dbPath}`, err);
+                    reject(err);
+                    return;
+                }
+            });
+
+            // Build UPDATE statement with parameterized queries
+            const updateColumns = Object.keys(updates);
+            const whereColumns = Object.keys(whereClause);
+
+            if (updateColumns.length === 0) {
+                db.close();
+                reject(new Error('No columns to update'));
+                return;
+            }
+
+            if (whereColumns.length === 0) {
+                db.close();
+                reject(new Error('WHERE clause is required for safety'));
+                return;
+            }
+
+            const setClause = updateColumns.map(col => `"${col.replace(/"/g, '""')}" = ?`).join(', ');
+            const whereClauseSql = whereColumns.map(col => `"${col.replace(/"/g, '""')}" = ?`).join(' AND ');
+            const sql = `UPDATE "${tableName.replace(/"/g, '""')}" SET ${setClause} WHERE ${whereClauseSql}`;
+
+            const params = [
+                ...updateColumns.map(col => updates[col]),
+                ...whereColumns.map(col => whereClause[col])
+            ];
+
+            logger.info(`Executing UPDATE: ${sql}`, { params });
+
+            db.run(sql, params, function(err) {
+                if (err) {
+                    logger.error(`Failed to update record in ${tableName}`, err);
+                    db.close();
+                    reject(err);
+                } else {
+                    const rowsAffected = this.changes;
+                    logger.info(`Updated ${rowsAffected} row(s) in ${tableName}`);
+                    db.close();
+                    resolve({ success: true, rowsAffected });
+                }
             });
         });
     }

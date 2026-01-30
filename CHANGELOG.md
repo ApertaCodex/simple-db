@@ -8,5 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- add edit mode styles and functionality (285222b)
 - track total database rows (52bc9ef)
 

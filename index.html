@@ -148,6 +148,88 @@
         .pulse-animation {
             animation: pulse-ring 2s infinite;
         }
+
+        /* Edit Mode Styles */
+        .edit-mode-enabled {
+            background-color: #dbeafe !important;
+            color: #1e40af !important;
+            border-color: #3b82f6 !important;
+        }
+
+        .dark .edit-mode-enabled {
+            background-color: #1e3a8a !important;
+            color: #93c5fd !important;
+            border-color: #3b82f6 !important;
+        }
+
+        .editable-cell {
+            cursor: text;
+            position: relative;
+        }
+
+        .editable-cell:hover {
+            background-color: #f0f9ff !important;
+            outline: 1px solid #3b82f6;
+        }
+
+        .dark .editable-cell:hover {
+            background-color: #1e3a8a !important;
+        }
+
+        .cell-editing {
+            padding: 0 !important;
+        }
+
+        .cell-edit-input {
+            width: 100%;
+            padding: 0.75rem 1.5rem;
+            border: 2px solid #3b82f6;
+            background-color: #fff;
+            color: #1f2937;
+            font-family: inherit;
+            font-size: inherit;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .dark .cell-edit-input {
+            background-color: #18181b;
+            color: #fafafa;
+            border-color: #3b82f6;
+        }
+
+        .cell-save-success {
+            animation: successFlash 0.5s ease-in-out;
+        }
+
+        @keyframes successFlash {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: #86efac; }
+        }
+
+        .dark .cell-save-success {
+            animation: successFlashDark 0.5s ease-in-out;
+        }
+
+        @keyframes successFlashDark {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: #166534; }
+        }
+
+        .cell-save-error {
+            animation: errorShake 0.5s ease-in-out;
+            background-color: #fecaca !important;
+        }
+
+        .dark .cell-save-error {
+            background-color: #7f1d1d !important;
+        }
+
+        @keyframes errorShake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
     </style>
 </head>
 
@@ -237,6 +319,18 @@
                 class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                 onclick="exportData()" title="Export CSV">
                 <span class="material-symbols-outlined text-lg">download</span>
+            </button>
+            
+            <div class="h-6 w-px bg-gray-200 mx-1 dark:bg-zinc-800"></div>
+            
+            <!-- Edit Mode Toggle -->
+            <button
+                class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-all rounded-lg"
+                id="editModeToggle"
+                onclick="toggleEditMode()"
+                title="Toggle Edit Mode">
+                <span class="material-symbols-outlined text-lg" id="editModeIcon">lock</span>
+                <span class="hidden sm:inline" id="editModeText">Read-Only</span>
             </button>
 
             <!-- Theme Toggle -->
@@ -440,7 +534,10 @@
             rowsPerPage: 20,
             columnFilters: {},
             globalSearch: '',
-            darkMode: false
+            darkMode: false,
+            editMode: false,
+            currentEdit: null,
+            editHistory: []
         };
 
         function getActiveDbName() {
@@ -1336,14 +1433,22 @@
 
             tbody.innerHTML = pageData.map((row, idx) => {
                 const rowIndex = startIndex + idx + 1;
+                const dataRowIndex = startIndex + idx; // Zero-based index for data array
                 return `
-                <tr class="hover:bg-blue-50/50 dark:hover:bg-zinc-800/50 transition-colors group border-b border-gray-100 dark:border-zinc-800 last:border-0">
+                <tr class="hover:bg-blue-50/50 dark:hover:bg-zinc-800/50 transition-colors group border-b border-gray-100 dark:border-zinc-800 last:border-0" data-row-index="${dataRowIndex}">
                     <td class="px-6 py-3 whitespace-nowrap text-xs font-medium text-gray-500 dark:text-zinc-500 sticky left-0 bg-white dark:bg-zinc-900 group-hover:bg-blue-50/50 dark:group-hover:bg-zinc-800/50">${rowIndex}</td>
                     ${visibleColumns.map(col => {
                 const val = row[col];
                 let content = val;
                 let cls = 'text-gray-700 dark:text-zinc-300';
                 const stats = columnStats[col];
+                
+                // Determine if cell is editable (not for complex formatted values)
+                const isEditableType = val === null || val === undefined ||
+                    typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean';
+                const editableClass = state.editMode && isEditableType ? 'editable-cell' : '';
+                const editableAttr = state.editMode && isEditableType ? `ondblclick="enterEditMode(event, ${dataRowIndex}, '${col}')"` : '';
+                const dataValue = val !== null && val !== undefined ? String(val).replace(/"/g, '&quot;') : '';
 
                 if (val === null || val === undefined) {
                     content = '<span class="text-gray-300 dark:text-zinc-700 italic">null</span>';
@@ -1358,7 +1463,7 @@
                 } else if (typeof val === 'number') {
                     cls = 'font-mono text-gray-600 dark:text-zinc-400';
                 }
-                return `<td class="px-6 py-3 whitespace-nowrap ${cls}">${content}</td>`;
+                return `<td class="px-6 py-3 whitespace-nowrap ${cls} ${editableClass}" data-column="${col}" data-value="${dataValue}" ${editableAttr}>${content}</td>`;
             }).join('')}
                 </tr>
             `;
@@ -1380,7 +1485,13 @@
                     else sortConfig = [];
                 } else sortConfig = [{ col: col, dir: 'asc' }];
             }
-            processData();
+            // In VSCode webview mode, request sorted data from server
+            if (isVSCodeWebview && vscode) {
+                state.currentPage = 1;
+                requestPage(1, state.rowsPerPage);
+            } else {
+                processData();
+            }
         }
 
         function processData() {
@@ -1483,7 +1594,8 @@
                     page: page,
                     pageSize: pageSize,
                     database: currentDbName,
-                    table: currentTableName
+                    table: currentTableName,
+                    sortConfig: sortConfig
                 });
                 saveToCache();
             }
@@ -1632,6 +1744,173 @@
                 a.download = "export.csv"; 
                 a.click();
             }
+        }
+
+        // --- 10. Cell Editing Functions ---
+        function toggleEditMode() {
+            state.editMode = !state.editMode;
+            const btn = document.getElementById('editModeToggle');
+            const icon = document.getElementById('editModeIcon');
+            const text = document.getElementById('editModeText');
+            
+            if (state.editMode) {
+                btn.classList.add('edit-mode-enabled', 'bg-blue-50', 'border-blue-300');
+                btn.classList.remove('text-gray-700', 'bg-white', 'border-gray-300');
+                icon.textContent = 'edit';
+                text.textContent = 'Edit Mode';
+            } else {
+                btn.classList.remove('edit-mode-enabled', 'bg-blue-50', 'border-blue-300');
+                btn.classList.add('text-gray-700', 'bg-white', 'border-gray-300');
+                icon.textContent = 'lock';
+                text.textContent = 'Read-Only';
+                
+                // Cancel any active edit
+                if (state.currentEdit) {
+                    cancelEdit();
+                }
+            }
+            
+            // Re-render to apply/remove editable classes
+            renderBody();
+        }
+
+        function enterEditMode(event, rowIndex, columnName) {
+            if (!state.editMode) return;
+            
+            // Cancel any existing edit
+            if (state.currentEdit) {
+                cancelEdit();
+            }
+            
+            const cell = event.currentTarget;
+            const currentValue = cell.dataset.value || '';
+            
+            // Store edit state
+            state.currentEdit = {
+                cell: cell,
+                rowIndex: rowIndex,
+                columnName: columnName,
+                originalValue: currentValue,
+                originalHTML: cell.innerHTML
+            };
+            
+            // Create input field
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = currentValue;
+            input.className = 'cell-edit-input';
+            
+            // Replace cell content with input
+            cell.innerHTML = '';
+            cell.appendChild(input);
+            cell.classList.add('cell-editing');
+            
+            // Focus and select text
+            input.focus();
+            input.select();
+            
+            // Handle save on Enter
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveEdit(input.value);
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelEdit();
+                }
+            });
+            
+            // Handle save on blur (clicking outside)
+            input.addEventListener('blur', () => {
+                setTimeout(() => {
+                    if (state.currentEdit && state.currentEdit.cell === cell) {
+                        saveEdit(input.value);
+                    }
+                }, 100);
+            });
+        }
+
+        function saveEdit(newValue) {
+            if (!state.currentEdit) return;
+            
+            const { cell, rowIndex, columnName, originalValue } = state.currentEdit;
+            
+            // Check if value changed
+            if (newValue === originalValue) {
+                cancelEdit();
+                return;
+            }
+            
+            // Get row data
+            const rowData = isVSCodeWebview ? filteredData[rowIndex - (state.currentPage - 1) * state.rowsPerPage] : filteredData[rowIndex];
+            
+            if (!rowData) {
+                showEditError(cell, 'Row data not found');
+                cancelEdit();
+                return;
+            }
+            
+            // Send update request to backend
+            if (isVSCodeWebview && vscode) {
+                vscode.postMessage({
+                    command: 'updateCell',
+                    rowData: rowData,
+                    columnName: columnName,
+                    newValue: newValue,
+                    tableName: currentTableName,
+                    database: currentDbName
+                });
+                
+                // Optimistically update UI
+                cell.innerHTML = newValue;
+                cell.classList.remove('cell-editing');
+                cell.dataset.value = newValue;
+                
+                // Add to edit history
+                state.editHistory.push({
+                    rowIndex: rowIndex,
+                    columnName: columnName,
+                    oldValue: originalValue,
+                    newValue: newValue,
+                    timestamp: Date.now()
+                });
+                
+                state.currentEdit = null;
+            } else {
+                // Standalone mode - would need SQL.js update implementation
+                showEditError(cell, 'Editing only supported in VSCode webview mode');
+                cancelEdit();
+            }
+        }
+
+        function cancelEdit() {
+            if (!state.currentEdit) return;
+            
+            const { cell, originalHTML } = state.currentEdit;
+            cell.innerHTML = originalHTML;
+            cell.classList.remove('cell-editing');
+            state.currentEdit = null;
+        }
+
+        function showEditSuccess(cell) {
+            cell.classList.add('cell-save-success');
+            setTimeout(() => {
+                cell.classList.remove('cell-save-success');
+            }, 500);
+        }
+
+        function showEditError(cell, message) {
+            cell.classList.add('cell-save-error');
+            setTimeout(() => {
+                cell.classList.remove('cell-save-error');
+            }, 500);
+            
+            // Show error toast
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-4 right-4 bg-red-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center';
+            toast.innerHTML = `<span class="material-symbols-outlined mr-2">error</span> ${message}`;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
         }
 
         // --- VS Code Webview Message Handler ---
@@ -1816,6 +2095,71 @@
                                 populateSampleQueries();
                             }
                         }
+                        break;
+                        
+                    case 'updateCellSuccess':
+                        // Cell update successful
+                        if (message.columnName !== undefined && message.newValue !== undefined) {
+                            // Update local data
+                            const rowIdx = state.editHistory.length > 0 ?
+                                state.editHistory[state.editHistory.length - 1].rowIndex : null;
+                            
+                            if (rowIdx !== null) {
+                                const localIdx = isVSCodeWebview ?
+                                    rowIdx - (state.currentPage - 1) * state.rowsPerPage : rowIdx;
+                                
+                                if (filteredData[localIdx]) {
+                                    filteredData[localIdx][message.columnName] = message.newValue;
+                                }
+                                if (allData[rowIdx]) {
+                                    allData[rowIdx][message.columnName] = message.newValue;
+                                }
+                            }
+                            
+                            // Find and show success animation on the cell
+                            const cells = document.querySelectorAll(`td[data-column="${message.columnName}"]`);
+                            cells.forEach(cell => {
+                                if (cell.dataset.value === String(message.newValue)) {
+                                    showEditSuccess(cell);
+                                }
+                            });
+                            
+                            // Show success toast
+                            const toast = document.createElement('div');
+                            toast.className = 'fixed bottom-4 right-4 bg-green-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center';
+                            toast.innerHTML = '<span class="material-symbols-outlined mr-2">check_circle</span> Cell updated successfully';
+                            document.body.appendChild(toast);
+                            setTimeout(() => toast.remove(), 2000);
+                        }
+                        break;
+                        
+                    case 'updateCellError':
+                        // Cell update failed
+                        const errorMessage = message.error || 'Failed to update cell';
+                        
+                        // Revert optimistic update
+                        if (state.editHistory.length > 0) {
+                            const lastEdit = state.editHistory.pop();
+                            const localIdx = isVSCodeWebview ?
+                                lastEdit.rowIndex - (state.currentPage - 1) * state.rowsPerPage : lastEdit.rowIndex;
+                            
+                            if (filteredData[localIdx]) {
+                                filteredData[localIdx][lastEdit.columnName] = lastEdit.oldValue;
+                            }
+                            if (allData[lastEdit.rowIndex]) {
+                                allData[lastEdit.rowIndex][lastEdit.columnName] = lastEdit.oldValue;
+                            }
+                            
+                            // Re-render to show reverted value
+                            renderBody();
+                        }
+                        
+                        // Show error toast
+                        const errorToast = document.createElement('div');
+                        errorToast.className = 'fixed bottom-4 right-4 bg-red-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center';
+                        errorToast.innerHTML = `<span class="material-symbols-outlined mr-2">error</span> ${errorMessage}`;
+                        document.body.appendChild(errorToast);
+                        setTimeout(() => errorToast.remove(), 4000);
                         break;
                 }
             });

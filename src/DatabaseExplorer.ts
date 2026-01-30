@@ -336,26 +336,41 @@ export class DatabaseExplorer {
                             vscode.window.showErrorMessage(`Export failed: ${error}`);
                         }
                     } else if (message.command === 'loadPage') {
-                        const requestedPageSize = this.normalizePageSize(message.pageSize, pageSize);
-                        const totalPages = Math.max(1, Math.ceil(totalRows / requestedPageSize));
-                        const requestedPage = this.normalizePageNumber(message.page, totalPages);
-                        const offset = (requestedPage - 1) * requestedPageSize;
-
                         try {
+                            // Use table/database from message, falling back to original values
+                            const targetDbName = message.database || connection.name;
+                            const targetTable = message.table || item.tableName;
+                            const targetConnection = this.connections.find(c => c.name === targetDbName) || connection;
+
+                            // Get sortConfig from message
+                            const sortConfig = Array.isArray(message.sortConfig) ? message.sortConfig : undefined;
+
+                            // Get total rows for the target table
+                            const targetTotalRows = targetConnection.type === 'sqlite'
+                                ? await this.sqliteManager.getTableRowCount(targetConnection.path, targetTable)
+                                : await this.mongoManager.getCollectionCount(targetConnection.path, targetTable);
+
+                            const requestedPageSize = this.normalizePageSize(message.pageSize, pageSize);
+                            const totalPages = Math.max(1, Math.ceil(targetTotalRows / requestedPageSize));
+                            const requestedPage = this.normalizePageNumber(message.page, totalPages);
+                            const offset = (requestedPage - 1) * requestedPageSize;
+
                             let pageData: any[] = [];
-                            if (connection.type === 'sqlite') {
+                            if (targetConnection.type === 'sqlite') {
                                 pageData = await this.sqliteManager.getTableData(
-                                    connection.path,
-                                    item.tableName,
+                                    targetConnection.path,
+                                    targetTable,
                                     requestedPageSize,
-                                    offset
+                                    offset,
+                                    sortConfig
                                 );
                             } else {
                                 pageData = await this.mongoManager.getCollectionData(
-                                    connection.path,
-                                    item.tableName,
+                                    targetConnection.path,
+                                    targetTable,
                                     requestedPageSize,
-                                    offset
+                                    offset,
+                                    sortConfig
                                 );
                             }
 
@@ -364,7 +379,7 @@ export class DatabaseExplorer {
                                 data: pageData,
                                 page: requestedPage,
                                 pageSize: requestedPageSize,
-                                totalRows
+                                totalRows: targetTotalRows
                             });
                         } catch (error) {
                             panel.webview.postMessage({
@@ -490,6 +505,103 @@ export class DatabaseExplorer {
                                 database: message.database,
                                 table: message.table
                             });
+                        }
+                    } else if (message.command === 'updateCell') {
+                        // Handle cell update request from webview
+                        try {
+                            const { rowData, columnName, newValue, tableName } = message;
+                            
+                            if (!rowData || !columnName || tableName === undefined) {
+                                panel.webview.postMessage({
+                                    command: 'updateCellError',
+                                    error: 'Missing required parameters for cell update'
+                                });
+                                return;
+                            }
+
+                            // Get primary keys or use _id for MongoDB
+                            let whereClause: { [key: string]: any } = {};
+                            let updateSuccess = false;
+                            let rowsAffected = 0;
+
+                            if (connection.type === 'sqlite') {
+                                // Get primary keys for the table
+                                const primaryKeys = await this.sqliteManager.getTablePrimaryKeys(connection.path, tableName);
+                                
+                                if (primaryKeys.length === 0) {
+                                    // No primary key - try to use all columns as identifier
+                                    // This is risky but better than not allowing edits
+                                    logger.warn(`Table ${tableName} has no primary key, using all original values as WHERE clause`);
+                                    Object.keys(rowData).forEach(key => {
+                                        if (key !== columnName) {
+                                            whereClause[key] = rowData[key];
+                                        }
+                                    });
+                                } else {
+                                    // Use primary keys
+                                    primaryKeys.forEach(pkCol => {
+                                        if (rowData[pkCol] === undefined) {
+                                            throw new Error(`Primary key column ${pkCol} not found in row data`);
+                                        }
+                                        whereClause[pkCol] = rowData[pkCol];
+                                    });
+                                }
+
+                                // Perform the update
+                                const result = await this.sqliteManager.updateRecord(
+                                    connection.path,
+                                    tableName,
+                                    whereClause,
+                                    { [columnName]: newValue }
+                                );
+                                
+                                updateSuccess = result.success;
+                                rowsAffected = result.rowsAffected;
+
+                                if (rowsAffected === 0) {
+                                    throw new Error('No rows were updated. The record may have been deleted or modified by another process.');
+                                } else if (rowsAffected > 1) {
+                                    throw new Error(`Warning: ${rowsAffected} rows were updated. This may indicate duplicate records.`);
+                                }
+                            } else if (connection.type === 'mongodb') {
+                                // MongoDB always has _id
+                                if (!rowData._id) {
+                                    throw new Error('MongoDB document must have _id field');
+                                }
+
+                                whereClause = { _id: rowData._id };
+
+                                const result = await this.mongoManager.updateDocument(
+                                    connection.path,
+                                    tableName,
+                                    whereClause,
+                                    { [columnName]: newValue }
+                                );
+
+                                updateSuccess = result.success;
+                                rowsAffected = result.modifiedCount;
+
+                                if (rowsAffected === 0) {
+                                    throw new Error('No documents were updated. The document may have been deleted or the value was already the same.');
+                                }
+                            }
+
+                            if (updateSuccess) {
+                                panel.webview.postMessage({
+                                    command: 'updateCellSuccess',
+                                    columnName,
+                                    newValue,
+                                    rowsAffected
+                                });
+                                logger.info(`Successfully updated ${columnName} in ${tableName}`);
+                            }
+                        } catch (error) {
+                            const errorMessage = error instanceof Error ? error.message : String(error);
+                            panel.webview.postMessage({
+                                command: 'updateCellError',
+                                error: errorMessage
+                            });
+                            logger.error(`Failed to update cell in ${item.tableName}`, error);
                         }
                     }
                 },
