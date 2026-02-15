@@ -1,16 +1,21 @@
 import * as vscode from 'vscode';
+import type { IDatabaseProvider, DatabaseType } from './types';
 
 // All other imports are dynamic to prevent activation failures
 let loggerModule: typeof import('./logger') | null = null;
 let DatabaseExplorerModule: typeof import('./DatabaseExplorer') | null = null;
 let SQLiteManagerModule: typeof import('./SQLiteManager') | null = null;
 let MongoDBManagerModule: typeof import('./MongoDBManager') | null = null;
+let PostgreSQLManagerModule: typeof import('./PostgreSQLManager') | null = null;
+let MySQLManagerModule: typeof import('./MySQLManager') | null = null;
+let RedisManagerModule: typeof import('./RedisManager') | null = null;
+let LibSQLManagerModule: typeof import('./LibSQLManager') | null = null;
 let SQLiteEditorProviderModule: typeof import('./SQLiteEditorProvider') | null = null;
 
-let sqliteManager: InstanceType<typeof import('./SQLiteManager').SQLiteManager> | undefined;
-let mongoManager: InstanceType<typeof import('./MongoDBManager').MongoDBManager> | undefined;
+// Provider registry — maps database type to its provider instance
+let providerRegistry: Map<DatabaseType, IDatabaseProvider> | undefined;
 let databaseExplorer: InstanceType<typeof import('./DatabaseExplorer').DatabaseExplorer> | undefined;
-let treeDataProvider: ReturnType<InstanceType<typeof import('./DatabaseExplorer').DatabaseExplorer>['getProvider']> | undefined;
+let treeDataProvider: ReturnType<InstanceType<typeof import('./DatabaseExplorer').DatabaseExplorer>['getTreeDataProvider']> | undefined;
 let extensionContext: vscode.ExtensionContext;
 
 function getLogger() {
@@ -20,32 +25,58 @@ function getLogger() {
     return loggerModule!.logger;
 }
 
+/**
+ * Lazily initialise the provider registry and DatabaseExplorer.
+ *
+ * To register a new database provider:
+ * 1. Import its module
+ * 2. Instantiate it
+ * 3. Add it to the registry map with its DatabaseType key
+ * No changes needed in DatabaseExplorer — it looks up providers from the map.
+ */
 async function getManagers() {
+    if (!providerRegistry) {
+        if (!SQLiteManagerModule) {
+            SQLiteManagerModule = await import('./SQLiteManager');
+        }
+        if (!MongoDBManagerModule) {
+            MongoDBManagerModule = await import('./MongoDBManager');
+        }
+        if (!PostgreSQLManagerModule) {
+            PostgreSQLManagerModule = await import('./PostgreSQLManager');
+        }
+        if (!MySQLManagerModule) {
+            MySQLManagerModule = await import('./MySQLManager');
+        }
+        if (!RedisManagerModule) {
+            RedisManagerModule = await import('./RedisManager');
+        }
+        if (!LibSQLManagerModule) {
+            LibSQLManagerModule = await import('./LibSQLManager');
+        }
 
-    if (!SQLiteManagerModule) {
-        SQLiteManagerModule = await import('./SQLiteManager');
+        providerRegistry = new Map<DatabaseType, IDatabaseProvider>();
+        providerRegistry.set('sqlite', new SQLiteManagerModule.SQLiteManager());
+        providerRegistry.set('mongodb', new MongoDBManagerModule.MongoDBManager());
+        providerRegistry.set('postgresql', new PostgreSQLManagerModule.PostgreSQLManager());
+        providerRegistry.set('mysql', new MySQLManagerModule.MySQLManager());
+        providerRegistry.set('redis', new RedisManagerModule.RedisManager());
+        providerRegistry.set('libsql', new LibSQLManagerModule.LibSQLManager());
     }
-    if (!MongoDBManagerModule) {
-        MongoDBManagerModule = await import('./MongoDBManager');
-    }
+
     if (!DatabaseExplorerModule) {
         DatabaseExplorerModule = await import('./DatabaseExplorer');
     }
 
-    if (!sqliteManager) {
-        sqliteManager = new SQLiteManagerModule.SQLiteManager();
-    }
-    if (!mongoManager) {
-        mongoManager = new MongoDBManagerModule.MongoDBManager();
-    }
     if (!databaseExplorer) {
-        databaseExplorer = new DatabaseExplorerModule.DatabaseExplorer(sqliteManager, mongoManager, extensionContext);
-        treeDataProvider = databaseExplorer.getProvider();
+        DatabaseExplorerModule.setExtensionPath(extensionContext.extensionPath);
+        databaseExplorer = new DatabaseExplorerModule.DatabaseExplorer(providerRegistry, extensionContext);
+        treeDataProvider = databaseExplorer.getTreeDataProvider();
         vscode.window.registerTreeDataProvider('databaseExplorer', treeDataProvider);
         // Refresh the tree view after registration to show any loaded connections
         treeDataProvider.refresh();
     }
-    return { sqliteManager, mongoManager, databaseExplorer, treeDataProvider: treeDataProvider! };
+    return { providerRegistry, databaseExplorer, treeDataProvider: treeDataProvider! };
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -124,6 +155,42 @@ export function activate(context: vscode.ExtensionContext) {
                 outputChannel.appendLine(`[${new Date().toISOString()}] addMongoDB error: ${error}`);
             }
         }),
+        vscode.commands.registerCommand('simpleDB.addPostgreSQL', async () => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                await databaseExplorer.addPostgreSQL();
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error adding PostgreSQL connection: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] addPostgreSQL error: ${error}`);
+            }
+        }),
+        vscode.commands.registerCommand('simpleDB.addMySQL', async () => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                await databaseExplorer.addMySQL();
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error adding MySQL connection: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] addMySQL error: ${error}`);
+            }
+        }),
+        vscode.commands.registerCommand('simpleDB.addRedis', async () => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                await databaseExplorer.addRedis();
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error adding Redis connection: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] addRedis error: ${error}`);
+            }
+        }),
+        vscode.commands.registerCommand('simpleDB.addLibSQL', async () => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                await databaseExplorer.addLibSQL();
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error adding LibSQL connection: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] addLibSQL error: ${error}`);
+            }
+        }),
         vscode.commands.registerCommand('simpleDB.refresh', async () => {
             try {
                 const { databaseExplorer, treeDataProvider } = await getManagers();
@@ -155,14 +222,6 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('simpleDB.openSQLiteFile', (uri) => {
             openSQLiteFile(uri);
-        }),
-        vscode.commands.registerCommand('simpleDB.openQueryConsole', async (item) => {
-            try {
-                const { databaseExplorer } = await getManagers();
-                databaseExplorer.openQueryConsole(item);
-            } catch (error) {
-                vscode.window.showErrorMessage(`Error opening query console: ${error}`);
-            }
         }),
         vscode.commands.registerCommand('simpleDB.exportToJSON', async (item) => {
             try {

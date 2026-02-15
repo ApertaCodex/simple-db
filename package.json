@@ -1,8 +1,8 @@
 {
     "name": "simple-db",
     "displayName": "Simple DB",
-    "description": "View, sort, and filter SQLite and MongoDB databases in VS Code",
-    "version": "2.0.56",
+    "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, and LibSQL/Turso databases in VS Code",
+    "version": "3.0.0",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -18,8 +18,14 @@
         "sqlite-simple",
         "simple-sqlite",
         "database",
-        "sqlite",
         "mongodb",
+        "postgresql",
+        "postgres",
+        "mysql",
+        "mariadb",
+        "redis",
+        "libsql",
+        "turso",
         "viewer",
         "data",
         "sql",
@@ -62,12 +68,50 @@
             {
                 "command": "simpleDB.addSQLite",
                 "title": "Add SQLite Database",
-                "icon": "$(database)"
+                "icon": {
+                    "light": "icons/sqlite.svg",
+                    "dark": "icons/sqlite.svg"
+                }
             },
             {
                 "command": "simpleDB.addMongoDB",
                 "title": "Add MongoDB Connection",
-                "icon": "$(server)"
+                "icon": {
+                    "light": "icons/mongodb.svg",
+                    "dark": "icons/mongodb.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addPostgreSQL",
+                "title": "Add PostgreSQL Connection",
+                "icon": {
+                    "light": "icons/postgresql.svg",
+                    "dark": "icons/postgresql.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addMySQL",
+                "title": "Add MySQL Connection",
+                "icon": {
+                    "light": "icons/mysql.svg",
+                    "dark": "icons/mysql.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addRedis",
+                "title": "Add Redis Connection",
+                "icon": {
+                    "light": "icons/redis.svg",
+                    "dark": "icons/redis.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addLibSQL",
+                "title": "Add LibSQL/Turso Connection",
+                "icon": {
+                    "light": "icons/libsql.svg",
+                    "dark": "icons/libsql.svg"
+                }
             },
             {
                 "command": "simpleDB.refresh",
@@ -86,11 +130,6 @@
                 "command": "simpleDB.openSQLiteFile",
                 "title": "Open SQLite Database",
                 "icon": "$(database)"
-            },
-            {
-                "command": "simpleDB.openQueryConsole",
-                "title": "Open Query Console",
-                "icon": "$(terminal)"
             },
             {
                 "command": "simpleDB.exportToJSON",
@@ -161,6 +200,26 @@
                 },
                 {
                     "command": "simpleDB.addMongoDB",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addPostgreSQL",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addMySQL",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addRedis",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addLibSQL",
                     "when": "view == databaseExplorer",
                     "group": "navigation"
                 },
@@ -244,7 +303,11 @@
                                 "type": "string",
                                 "enum": [
                                     "sqlite",
-                                    "mongodb"
+                                    "mongodb",
+                                    "postgresql",
+                                    "mysql",
+                                    "redis",
+                                    "libsql"
                                 ],
                                 "description": "Database type"
                             },
@@ -280,6 +343,7 @@
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
+        "test": "npm run compile && mkdir -p out/test && cp src/test/vscode-mock.js out/test/ && node --require ./out/test/vscode-mock.js --test out/test/providers.test.js",
         "package": "vsce package",
         "build": "npm run compile && rm -f simple-db-*.vsix && vsce package && npm run install-ext",
         "install-ext": "code --install-extension simple-db-*.vsix --force 2>/dev/null; code-insiders --install-extension simple-db-*.vsix --force 2>/dev/null; true",
@@ -287,12 +351,17 @@
     },
     "devDependencies": {
         "@types/node": "^25.0.9",
+        "@types/pg": "^8.16.0",
         "@types/vscode": "^1.108.1",
         "ovsx": "^0.10.8",
         "typescript": "^5.9.3"
     },
     "dependencies": {
+        "@libsql/client": "^0.17.0",
         "@vscode/sqlite3": "^5.1.8-vscode",
-        "mongoose": "^9.1.5"
+        "ioredis": "^5.9.3",
+        "mongoose": "^9.1.5",
+        "mysql2": "^3.17.1",
+        "pg": "^8.18.0"
     }
 }

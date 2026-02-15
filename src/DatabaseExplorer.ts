@@ -1,16 +1,19 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { SQLiteManager } from './SQLiteManager';
-import { MongoDBManager } from './MongoDBManager';
 import { logger } from './logger';
+import type { IDatabaseProvider, DatabaseItem, DatabaseType, TableSettings } from './types';
 
-interface DatabaseItem {
-    name: string;
-    type: 'sqlite' | 'mongodb';
-    path: string;
-    tables: string[];
-    tableCounts?: { [tableName: string]: number };
-    countsLoaded?: boolean;
+/** Resolve the per-provider SVG icon path (works for both light & dark themes). */
+function providerIconPath(extensionPath: string, providerType: string): { light: vscode.Uri; dark: vscode.Uri } {
+    const iconFile = path.join(extensionPath, 'icons', `${providerType}.svg`);
+    return { light: vscode.Uri.file(iconFile), dark: vscode.Uri.file(iconFile) };
+}
+
+let _extensionPath: string = '';
+
+/** Must be called once at activation time so tree items can resolve icon paths. */
+export function setExtensionPath(p: string) {
+    _extensionPath = p;
 }
 
 class DatabaseTreeItem extends vscode.TreeItem {
@@ -35,18 +38,26 @@ class DatabaseTreeItem extends vscode.TreeItem {
                 this.iconPath = new vscode.ThemeIcon('info');
                 this.description = '';
             } else if (contextValue === 'actionButton') {
-                this.iconPath = new vscode.ThemeIcon('add');
-                // Set command for action buttons
-                if (label.includes('SQLite')) {
-                    this.command = {
-                        command: 'simpleDB.addSQLite',
-                        title: 'Add SQLite Database'
-                    };
-                } else if (label.includes('MongoDB')) {
-                    this.command = {
-                        command: 'simpleDB.addMongoDB',
-                        title: 'Add MongoDB Connection'
-                    };
+                // Map action button labels to commands + provider icon key
+                const actionCommandMap: Record<string, { command: string; title: string; icon: string }> = {
+                    'SQLite': { command: 'simpleDB.addSQLite', title: 'Add SQLite Database', icon: 'sqlite' },
+                    'MongoDB': { command: 'simpleDB.addMongoDB', title: 'Add MongoDB Connection', icon: 'mongodb' },
+                    'PostgreSQL': { command: 'simpleDB.addPostgreSQL', title: 'Add PostgreSQL Connection', icon: 'postgresql' },
+                    'MySQL': { command: 'simpleDB.addMySQL', title: 'Add MySQL Connection', icon: 'mysql' },
+                    'Redis': { command: 'simpleDB.addRedis', title: 'Add Redis Connection', icon: 'redis' },
+                    'LibSQL': { command: 'simpleDB.addLibSQL', title: 'Add LibSQL/Turso Connection', icon: 'libsql' },
+                };
+                let matched = false;
+                for (const [keyword, entry] of Object.entries(actionCommandMap)) {
+                    if (label.includes(keyword)) {
+                        this.command = { command: entry.command, title: entry.title };
+                        this.iconPath = providerIconPath(_extensionPath, entry.icon);
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    this.iconPath = new vscode.ThemeIcon('add');
                 }
             }
             return;
@@ -59,7 +70,7 @@ class DatabaseTreeItem extends vscode.TreeItem {
         this.contextValue = contextValue;
 
         if (contextValue === 'connection' && connection) {
-            this.iconPath = new vscode.ThemeIcon(connection.type === 'sqlite' ? 'database' : 'server');
+            this.iconPath = providerIconPath(_extensionPath, connection.type);
             // Show table count for database connections
             if (connection.tables && connection.tables.length > 0) {
                 this.description = `${connection.tables.length} ${connection.tables.length === 1 ? 'table' : 'tables'}`;
@@ -69,7 +80,9 @@ class DatabaseTreeItem extends vscode.TreeItem {
             if (recordCount !== undefined) {
                 this.description = `${recordCount.toLocaleString()} rows`;
             }
-            this.iconPath = new vscode.ThemeIcon('table');
+            this.iconPath = connection
+                ? providerIconPath(_extensionPath, `table-${connection.type}`)
+                : new vscode.ThemeIcon('table');
             // Auto-open table data on click
             this.command = {
                 command: 'simpleDB.viewData',
@@ -80,13 +93,6 @@ class DatabaseTreeItem extends vscode.TreeItem {
     }
 }
 
-
-interface TableSettings {
-    visibleColumns: string[];
-    columnFilters: { [column: string]: { op: string; value: string; value2?: string } };
-    sortConfig: { column: string; direction: 'asc' | 'desc' }[];
-}
-
 export class DatabaseExplorer {
     connections: DatabaseItem[] = [];
     private _disposables: vscode.Disposable[] = [];
@@ -95,12 +101,33 @@ export class DatabaseExplorer {
     private readonly TABLE_SETTINGS_KEY = 'simpleDB.tableSettings';
 
     constructor(
-        public sqliteManager: SQLiteManager,
-        public mongoManager: MongoDBManager,
+        private providers: Map<DatabaseType, IDatabaseProvider>,
         private context: vscode.ExtensionContext
     ) {
         this._treeDataProvider = new DatabaseTreeDataProvider(this);
         this.loadConnections();
+    }
+
+    /**
+     * Get the provider for a given connection, throwing if not registered.
+     */
+    getProvider(connection: DatabaseItem): IDatabaseProvider {
+        const provider = this.providers.get(connection.type);
+        if (!provider) {
+            throw new Error(`No provider registered for database type: ${connection.type}`);
+        }
+        return provider;
+    }
+
+    /**
+     * Get the provider for a given database type, throwing if not registered.
+     */
+    getProviderByType(type: DatabaseType): IDatabaseProvider {
+        const provider = this.providers.get(type);
+        if (!provider) {
+            throw new Error(`No provider registered for database type: ${type}`);
+        }
+        return provider;
     }
 
     // Save table settings to extension cache (globalState)
@@ -118,7 +145,7 @@ export class DatabaseExplorer {
         return allSettings[key];
     }
 
-    getProvider() {
+    getTreeDataProvider() {
         return this._treeDataProvider;
     }
 
@@ -169,7 +196,8 @@ export class DatabaseExplorer {
         };
 
         try {
-            connection.tables = await this.sqliteManager.getTables(filePath);
+            const provider = this.getProvider(connection);
+            connection.tables = await provider.getTableNames(filePath);
             this.connections.push(connection);
             this.saveConnections();
             this._treeDataProvider.refresh();
@@ -204,7 +232,8 @@ export class DatabaseExplorer {
 
                 try {
                     logger.info(`Adding MongoDB connection: ${name} (${connectionString})`);
-                    connection.tables = await this.mongoManager.getCollections(connectionString);
+                    const provider = this.getProvider(connection);
+                    connection.tables = await provider.getTableNames(connectionString);
                     this.connections.push(connection);
                     this.saveConnections();
                     this._treeDataProvider.refresh();
@@ -218,6 +247,162 @@ export class DatabaseExplorer {
         }
     }
 
+    async addPostgreSQL() {
+        const connectionString = await vscode.window.showInputBox({
+            prompt: 'Enter PostgreSQL connection string',
+            value: 'postgresql://user:password@localhost:5432/mydb',
+            placeHolder: 'postgresql://user:password@host:port/database'
+        });
+
+        if (connectionString) {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Enter connection name',
+                value: 'PostgreSQL'
+            });
+
+            if (name) {
+                const connection: DatabaseItem = {
+                    name,
+                    type: 'postgresql',
+                    path: connectionString,
+                    tables: [],
+                    countsLoaded: false
+                };
+
+                try {
+                    logger.info(`Adding PostgreSQL connection: ${name}`);
+                    const provider = this.getProvider(connection);
+                    connection.tables = await provider.getTableNames(connectionString);
+                    this.connections.push(connection);
+                    this.saveConnections();
+                    this._treeDataProvider.refresh();
+                    logger.info(`PostgreSQL connection "${name}" added successfully with ${connection.tables.length} tables`);
+                    vscode.window.showInformationMessage(`PostgreSQL connection "${name}" added successfully with ${connection.tables.length} tables`);
+                } catch (error) {
+                    logger.error(`Failed to connect to PostgreSQL "${name}"`, error);
+                    vscode.window.showErrorMessage(`Failed to connect to PostgreSQL: ${error}`);
+                }
+            }
+        }
+    }
+
+    async addMySQL() {
+        const connectionString = await vscode.window.showInputBox({
+            prompt: 'Enter MySQL connection string',
+            value: 'mysql://user:password@localhost:3306/mydb',
+            placeHolder: 'mysql://user:password@host:port/database'
+        });
+
+        if (connectionString) {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Enter connection name',
+                value: 'MySQL'
+            });
+
+            if (name) {
+                const connection: DatabaseItem = {
+                    name,
+                    type: 'mysql',
+                    path: connectionString,
+                    tables: [],
+                    countsLoaded: false
+                };
+
+                try {
+                    logger.info(`Adding MySQL connection: ${name}`);
+                    const provider = this.getProvider(connection);
+                    connection.tables = await provider.getTableNames(connectionString);
+                    this.connections.push(connection);
+                    this.saveConnections();
+                    this._treeDataProvider.refresh();
+                    logger.info(`MySQL connection "${name}" added successfully with ${connection.tables.length} tables`);
+                    vscode.window.showInformationMessage(`MySQL connection "${name}" added successfully with ${connection.tables.length} tables`);
+                } catch (error) {
+                    logger.error(`Failed to connect to MySQL "${name}"`, error);
+                    vscode.window.showErrorMessage(`Failed to connect to MySQL: ${error}`);
+                }
+            }
+        }
+    }
+
+    async addRedis() {
+        const connectionString = await vscode.window.showInputBox({
+            prompt: 'Enter Redis connection string',
+            value: 'redis://localhost:6379',
+            placeHolder: 'redis://[:password@]host:port[/db]'
+        });
+
+        if (connectionString) {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Enter connection name',
+                value: 'Redis'
+            });
+
+            if (name) {
+                const connection: DatabaseItem = {
+                    name,
+                    type: 'redis',
+                    path: connectionString,
+                    tables: [],
+                    countsLoaded: false
+                };
+
+                try {
+                    logger.info(`Adding Redis connection: ${name}`);
+                    const provider = this.getProvider(connection);
+                    connection.tables = await provider.getTableNames(connectionString);
+                    this.connections.push(connection);
+                    this.saveConnections();
+                    this._treeDataProvider.refresh();
+                    logger.info(`Redis connection "${name}" added successfully with ${connection.tables.length} key prefixes`);
+                    vscode.window.showInformationMessage(`Redis connection "${name}" added successfully with ${connection.tables.length} key prefixes`);
+                } catch (error) {
+                    logger.error(`Failed to connect to Redis "${name}"`, error);
+                    vscode.window.showErrorMessage(`Failed to connect to Redis: ${error}`);
+                }
+            }
+        }
+    }
+
+    async addLibSQL() {
+        const connectionString = await vscode.window.showInputBox({
+            prompt: 'Enter LibSQL/Turso connection string',
+            value: 'file:local.db',
+            placeHolder: 'file:path.db or libsql://db-name.turso.io?authToken=TOKEN'
+        });
+
+        if (connectionString) {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Enter connection name',
+                value: 'LibSQL'
+            });
+
+            if (name) {
+                const connection: DatabaseItem = {
+                    name,
+                    type: 'libsql',
+                    path: connectionString,
+                    tables: [],
+                    countsLoaded: false
+                };
+
+                try {
+                    logger.info(`Adding LibSQL/Turso connection: ${name}`);
+                    const provider = this.getProvider(connection);
+                    connection.tables = await provider.getTableNames(connectionString);
+                    this.connections.push(connection);
+                    this.saveConnections();
+                    this._treeDataProvider.refresh();
+                    logger.info(`LibSQL connection "${name}" added successfully with ${connection.tables.length} tables`);
+                    vscode.window.showInformationMessage(`LibSQL connection "${name}" added successfully with ${connection.tables.length} tables`);
+                } catch (error) {
+                    logger.error(`Failed to connect to LibSQL "${name}"`, error);
+                    vscode.window.showErrorMessage(`Failed to connect to LibSQL: ${error}`);
+                }
+            }
+        }
+    }
+
     async refreshTables(connection: DatabaseItem) {
         try {
             logger.info(`Refreshing tables for connection: ${connection.name}`);
@@ -225,21 +410,13 @@ export class DatabaseExplorer {
             connection.countsLoaded = false;
             connection.tableCounts = {};
             
-            if (connection.type === 'mongodb') {
-                const collections = await this.mongoManager.getCollections(connection.path);
-                connection.tables = collections;
-                this.saveConnections();
-                this._treeDataProvider.refresh();
-                logger.info(`Collections refreshed for "${connection.name}": ${collections.length} collections`);
-                vscode.window.showInformationMessage(`Collections refreshed for "${connection.name}"`);
-            } else if (connection.type === 'sqlite') {
-                const tables = await this.sqliteManager.getTables(connection.path);
-                connection.tables = tables;
-                this.saveConnections();
-                this._treeDataProvider.refresh();
-                logger.info(`Tables refreshed for "${connection.name}": ${tables.length} tables`);
-                vscode.window.showInformationMessage(`Tables refreshed for "${connection.name}"`);
-            }
+            const provider = this.getProvider(connection);
+            const tables = await provider.getTableNames(connection.path);
+            connection.tables = tables;
+            this.saveConnections();
+            this._treeDataProvider.refresh();
+            logger.info(`Tables refreshed for "${connection.name}": ${tables.length} tables/collections`);
+            vscode.window.showInformationMessage(`Tables refreshed for "${connection.name}"`);
         } catch (error) {
             logger.error(`Failed to refresh tables/collections for "${connection.name}"`, error);
             vscode.window.showErrorMessage(`Failed to refresh tables/collections: ${error}`);
@@ -270,20 +447,11 @@ export class DatabaseExplorer {
         
         try {
             const pageSize = this.defaultPageSize;
-            let data: any[] = [];
-            let totalRows = 0;
-
-            if (connection.type === 'sqlite') {
-                [data, totalRows] = await Promise.all([
-                    this.sqliteManager.getTableData(connection.path, item.tableName, pageSize, 0),
-                    this.sqliteManager.getTableRowCount(connection.path, item.tableName)
-                ]);
-            } else {
-                [data, totalRows] = await Promise.all([
-                    this.mongoManager.getCollectionData(connection.path, item.tableName, pageSize, 0),
-                    this.mongoManager.getCollectionCount(connection.path, item.tableName)
-                ]);
-            }
+            const provider = this.getProvider(connection);
+            const [data, totalRows] = await Promise.all([
+                provider.getTableData(connection.path, item.tableName, pageSize, 0),
+                provider.getRowCount(connection.path, item.tableName)
+            ]);
 
             const panel = this.showDataGrid(data, item.tableName, totalRows, pageSize, connection.type, connection.name);
 
@@ -341,38 +509,26 @@ export class DatabaseExplorer {
                             const targetDbName = message.database || connection.name;
                             const targetTable = message.table || item.tableName;
                             const targetConnection = this.connections.find(c => c.name === targetDbName) || connection;
+                            const targetProvider = this.getProvider(targetConnection);
 
                             // Get sortConfig from message
                             const sortConfig = Array.isArray(message.sortConfig) ? message.sortConfig : undefined;
 
                             // Get total rows for the target table
-                            const targetTotalRows = targetConnection.type === 'sqlite'
-                                ? await this.sqliteManager.getTableRowCount(targetConnection.path, targetTable)
-                                : await this.mongoManager.getCollectionCount(targetConnection.path, targetTable);
+                            const targetTotalRows = await targetProvider.getRowCount(targetConnection.path, targetTable);
 
                             const requestedPageSize = this.normalizePageSize(message.pageSize, pageSize);
                             const totalPages = Math.max(1, Math.ceil(targetTotalRows / requestedPageSize));
                             const requestedPage = this.normalizePageNumber(message.page, totalPages);
                             const offset = (requestedPage - 1) * requestedPageSize;
 
-                            let pageData: any[] = [];
-                            if (targetConnection.type === 'sqlite') {
-                                pageData = await this.sqliteManager.getTableData(
-                                    targetConnection.path,
-                                    targetTable,
-                                    requestedPageSize,
-                                    offset,
-                                    sortConfig
-                                );
-                            } else {
-                                pageData = await this.mongoManager.getCollectionData(
-                                    targetConnection.path,
-                                    targetTable,
-                                    requestedPageSize,
-                                    offset,
-                                    sortConfig
-                                );
-                            }
+                            const pageData = await targetProvider.getTableData(
+                                targetConnection.path,
+                                targetTable,
+                                requestedPageSize,
+                                offset,
+                                sortConfig
+                            );
 
                             panel.webview.postMessage({
                                 command: 'pageData',
@@ -389,17 +545,17 @@ export class DatabaseExplorer {
                         }
                     } else if (message.command === 'executeQuery') {
                         try {
-                            let result;
-                            if (connection.type === 'sqlite') {
-                                result = await this.executeQuery(connection.path, message.query);
-                            } else {
-                                result = await this.executeMongoQuery(connection.path, message.query, item.tableName);
-                            }
+                            const queryProvider = this.getProvider(connection);
+                            const result = await queryProvider.executeQuery(
+                                connection.path,
+                                message.query,
+                                { tableName: item.tableName }
+                            );
 
                             panel.webview.postMessage({
                                 command: 'queryResult',
-                                data: result.data || result,
-                                rowCount: result.data?.length || (Array.isArray(result) ? result.length : 0)
+                                data: result,
+                                rowCount: Array.isArray(result) ? result.length : 0
                             });
                         } catch (error) {
                             panel.webview.postMessage({
@@ -452,13 +608,9 @@ export class DatabaseExplorer {
                                 return;
                             }
 
-                            const tableData = await (dbConnection.type === 'sqlite'
-                                ? this.sqliteManager.getTableData(dbConnection.path, message.table, pageSize, 0)
-                                : this.mongoManager.getCollectionData(dbConnection.path, message.table, pageSize, 0));
-
-                            const tableRowCount = await (dbConnection.type === 'sqlite'
-                                ? this.sqliteManager.getTableRowCount(dbConnection.path, message.table)
-                                : this.mongoManager.getCollectionCount(dbConnection.path, message.table));
+                            const loadTableProvider = this.getProvider(dbConnection);
+                            const tableData = await loadTableProvider.getTableData(dbConnection.path, message.table, pageSize, 0);
+                            const tableRowCount = await loadTableProvider.getRowCount(dbConnection.path, message.table);
 
                             panel.webview.postMessage({
                                 command: 'tableData',
@@ -519,79 +671,27 @@ export class DatabaseExplorer {
                                 return;
                             }
 
-                            // Get primary keys or use _id for MongoDB
-                            let whereClause: { [key: string]: any } = {};
-                            let updateSuccess = false;
-                            let rowsAffected = 0;
+                            const updateProvider = this.getProvider(connection);
+                            const whereClause = await updateProvider.getRecordIdentifier(connection.path, tableName, rowData);
+                            const result = await updateProvider.updateRecord(
+                                connection.path,
+                                tableName,
+                                whereClause,
+                                { [columnName]: newValue }
+                            );
 
-                            if (connection.type === 'sqlite') {
-                                // Get primary keys for the table
-                                const primaryKeys = await this.sqliteManager.getTablePrimaryKeys(connection.path, tableName);
-                                
-                                if (primaryKeys.length === 0) {
-                                    // No primary key - try to use all columns as identifier
-                                    // This is risky but better than not allowing edits
-                                    logger.warn(`Table ${tableName} has no primary key, using all original values as WHERE clause`);
-                                    Object.keys(rowData).forEach(key => {
-                                        if (key !== columnName) {
-                                            whereClause[key] = rowData[key];
-                                        }
-                                    });
-                                } else {
-                                    // Use primary keys
-                                    primaryKeys.forEach(pkCol => {
-                                        if (rowData[pkCol] === undefined) {
-                                            throw new Error(`Primary key column ${pkCol} not found in row data`);
-                                        }
-                                        whereClause[pkCol] = rowData[pkCol];
-                                    });
-                                }
-
-                                // Perform the update
-                                const result = await this.sqliteManager.updateRecord(
-                                    connection.path,
-                                    tableName,
-                                    whereClause,
-                                    { [columnName]: newValue }
-                                );
-                                
-                                updateSuccess = result.success;
-                                rowsAffected = result.rowsAffected;
-
-                                if (rowsAffected === 0) {
-                                    throw new Error('No rows were updated. The record may have been deleted or modified by another process.');
-                                } else if (rowsAffected > 1) {
-                                    throw new Error(`Warning: ${rowsAffected} rows were updated. This may indicate duplicate records.`);
-                                }
-                            } else if (connection.type === 'mongodb') {
-                                // MongoDB always has _id
-                                if (!rowData._id) {
-                                    throw new Error('MongoDB document must have _id field');
-                                }
-
-                                whereClause = { _id: rowData._id };
-
-                                const result = await this.mongoManager.updateDocument(
-                                    connection.path,
-                                    tableName,
-                                    whereClause,
-                                    { [columnName]: newValue }
-                                );
-
-                                updateSuccess = result.success;
-                                rowsAffected = result.modifiedCount;
-
-                                if (rowsAffected === 0) {
-                                    throw new Error('No documents were updated. The document may have been deleted or the value was already the same.');
-                                }
+                            if (result.affectedCount === 0) {
+                                throw new Error('No rows were updated. The record may have been deleted or modified by another process.');
+                            } else if (result.affectedCount > 1) {
+                                throw new Error(`Warning: ${result.affectedCount} rows were updated. This may indicate duplicate records.`);
                             }
 
-                            if (updateSuccess) {
+                            if (result.success) {
                                 panel.webview.postMessage({
                                     command: 'updateCellSuccess',
                                     columnName,
                                     newValue,
-                                    rowsAffected
+                                    rowsAffected: result.affectedCount
                                 });
                                 logger.info(`Successfully updated ${columnName} in ${tableName}`);
                             }
@@ -610,29 +710,6 @@ export class DatabaseExplorer {
             );
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to load data: ${error}`);
-        }
-    }
-
-    async openQueryConsole(item: DatabaseTreeItem) {
-        if (!item.connection) {
-            vscode.window.showErrorMessage('No database connection available');
-            return;
-        }
-        
-        const connection = item.connection; // Store reference for callbacks
-        
-        try {
-            const pageSize = this.defaultPageSize;
-            let data;
-            if (connection.type === 'sqlite') {
-                data = await this.sqliteManager.getTableData(connection.path, item.tableName, pageSize, 0);
-            } else {
-                data = await this.mongoManager.getCollectionData(connection.path, item.tableName, pageSize, 0);
-            }
-
-            this.showQueryConsole(data, item.tableName, connection.path);
-        } catch (error) {
-            vscode.window.showErrorMessage(`Failed to open query console: ${error}`);
         }
     }
 
@@ -659,14 +736,8 @@ export class DatabaseExplorer {
             }
 
             let outputPath: string;
-            if (connection.type === 'sqlite') {
-                outputPath = await this.sqliteManager.exportToJSON(connection.path, tableName, uri.fsPath, data);
-            } else if (connection.type === 'mongodb') {
-                outputPath = await this.mongoManager.exportToJSON(connection.path, tableName, uri.fsPath, data);
-            } else {
-                vscode.window.showErrorMessage('Unsupported database type');
-                return;
-            }
+            const exportProvider = this.getProvider(connection);
+            outputPath = await exportProvider.exportToJSON(connection.path, tableName, uri.fsPath, data);
 
             vscode.window.showInformationMessage(
                 `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`
@@ -703,14 +774,8 @@ export class DatabaseExplorer {
             }
 
             let outputPath: string;
-            if (connection.type === 'sqlite') {
-                outputPath = await this.sqliteManager.exportToCSV(connection.path, tableName, uri.fsPath, data);
-            } else if (connection.type === 'mongodb') {
-                outputPath = await this.mongoManager.exportToCSV(connection.path, tableName, uri.fsPath, data);
-            } else {
-                vscode.window.showErrorMessage('Unsupported database type');
-                return;
-            }
+            const csvProvider = this.getProvider(connection);
+            outputPath = await csvProvider.exportToCSV(connection.path, tableName, uri.fsPath, data);
 
             vscode.window.showInformationMessage(
                 `Exported ${data ? data.length + ' rows' : 'table/collection'} to: ${outputPath}`
@@ -731,11 +796,6 @@ export class DatabaseExplorer {
         }
 
         const connection = item.connection;
-
-        if (connection.type !== 'sqlite') {
-            vscode.window.showErrorMessage('Import is currently only supported for SQLite databases');
-            return;
-        }
 
         try {
             const uri = await vscode.window.showOpenDialog({
@@ -767,7 +827,8 @@ export class DatabaseExplorer {
                 return;
             }
 
-            const rowCount = await this.sqliteManager.importFromJSON(connection.path, tableName, uri[0].fsPath);
+            const importProvider = this.getProvider(connection);
+            const rowCount = await importProvider.importFromJSON(connection.path, tableName, uri[0].fsPath);
             vscode.window.showInformationMessage(`Imported ${rowCount} rows into table "${tableName}"`);
 
             await this.refreshTables(connection);
@@ -784,11 +845,6 @@ export class DatabaseExplorer {
         }
 
         const connection = item.connection;
-
-        if (connection.type !== 'sqlite') {
-            vscode.window.showErrorMessage('Import is currently only supported for SQLite databases');
-            return;
-        }
 
         try {
             const uri = await vscode.window.showOpenDialog({
@@ -820,7 +876,8 @@ export class DatabaseExplorer {
                 return;
             }
 
-            const rowCount = await this.sqliteManager.importFromCSV(connection.path, tableName, uri[0].fsPath);
+            const csvImportProvider = this.getProvider(connection);
+            const rowCount = await csvImportProvider.importFromCSV(connection.path, tableName, uri[0].fsPath);
             vscode.window.showInformationMessage(`Imported ${rowCount} rows into table "${tableName}"`);
 
             await this.refreshTables(connection);
@@ -870,7 +927,8 @@ export class DatabaseExplorer {
             let tableSchema = '';
             let sampleData = '';
             if (connection.type === 'sqlite') {
-                const tableData = await this.sqliteManager.getTableData(connection.path, tableName, 3, 0);
+                const aiProvider = this.getProvider(connection);
+                const tableData = await aiProvider.getTableData(connection.path, tableName, 3, 0);
                 if (tableData.length > 0) {
                     const columns = Object.keys(tableData[0]);
                     tableSchema = `Table: ${tableName}\nColumns: ${columns.join(', ')}`;
@@ -946,99 +1004,12 @@ Rules:
         return this.generateAIQueryForTable(item.connection, tableName, prompt);
     }
 
-    private async executeQuery(dbPath: string, query: string): Promise<any> {
-        try {
-            // For now, we'll use SQLite manager to execute queries
-            // This is a simplified implementation
-            const sqlite3 = require('@vscode/sqlite3').verbose();
-            const db = new sqlite3.Database(dbPath);
-            
-            return new Promise((resolve, reject) => {
-                db.all(query, [], (err: any, rows: any[]) => {
-                    db.close();
-                    if (err) {
-                        reject(err);
-                    } else {
-                        resolve({ data: rows });
-                    }
-                });
-            });
-        } catch (error) {
-            throw new Error(`Query execution failed: ${error}`);
-        }
-    }
-
-    private async executeMongoQuery(connectionString: string, query: string, collectionName: string): Promise<any> {
-        try {
-            // Parse MongoDB query - it could be a filter object or a command
-            query = query.trim();
-            
-            // Handle db.collection.find() style queries
-            const findMatch = query.match(/db\.\w+\.find\((.*)\)/);
-            const countMatch = query.match(/db\.\w+\.(?:countDocuments|count)\((.*)\)/);
-            const aggregateMatch = query.match(/db\.\w+\.aggregate\((.*)\)/);
-            
-            let filter: any = {};
-            let limit = 1000;
-            
-            if (findMatch) {
-                // Extract filter from find query
-                const filterStr = findMatch[1].trim();
-                if (filterStr && filterStr !== '{}') {
-                    try {
-                        // Try to parse as JSON
-                        filter = JSON.parse(filterStr);
-                    } catch {
-                        // If not valid JSON, try to evaluate it safely
-                        try {
-                            filter = eval('(' + filterStr + ')');
-                        } catch {
-                            throw new Error('Invalid filter syntax. Use valid JSON or JavaScript object notation.');
-                        }
-                    }
-                }
-                const result = await this.mongoManager.executeQuery(connectionString, collectionName, filter, limit);
-                return { data: result };
-            } else if (countMatch) {
-                // Handle count queries
-                const filterStr = countMatch[1].trim();
-                if (filterStr && filterStr !== '{}') {
-                    try {
-                        filter = JSON.parse(filterStr);
-                    } catch {
-                        filter = eval('(' + filterStr + ')');
-                    }
-                }
-                const count = await this.mongoManager.getCollectionCount(connectionString, collectionName);
-                return { data: [{ count }] };
-            } else if (aggregateMatch) {
-                // For aggregate, we'll need to add support in MongoDBManager
-                throw new Error('Aggregate queries are not yet supported. Use find() queries.');
-            } else {
-                // Try to parse as a plain filter object
-                try {
-                    if (query === '' || query === '{}') {
-                        filter = {};
-                    } else {
-                        filter = JSON.parse(query);
-                    }
-                    const result = await this.mongoManager.executeQuery(connectionString, collectionName, filter, limit);
-                    return { data: result };
-                } catch {
-                    throw new Error('Invalid query format. Use MongoDB find() syntax: db.collection.find({field: "value"}) or JSON filter: {"field": "value"}');
-                }
-            }
-        } catch (error) {
-            throw new Error(`MongoDB query execution failed: ${error}`);
-        }
-    }
-
     private showDataGrid(
         data: any[],
         tableName: string,
         totalRows: number,
         pageSize: number,
-        dbType: 'sqlite' | 'mongodb',
+        dbType: DatabaseType,
         databaseName: string
     ): vscode.WebviewPanel {
         const panel = vscode.window.createWebviewPanel(
@@ -1102,11 +1073,10 @@ Rules:
                 const conn = this.connections.find(c => c.name === db.name);
                 if (!conn) return db;
                 
+                const countProvider = this.getProvider(conn);
                 const tablesWithCounts = await Promise.all(db.tables.map(async (tableName: string) => {
                     try {
-                        const count = conn.type === 'sqlite'
-                            ? await this.sqliteManager.getTableRowCount(conn.path, tableName)
-                            : await this.mongoManager.getCollectionCount(conn.path, tableName);
+                        const count = await countProvider.getRowCount(conn.path, tableName);
                         return { name: tableName, count };
                     } catch {
                         return { name: tableName, count: 0 };
@@ -1130,57 +1100,6 @@ Rules:
         }
     }
 
-    private showQueryConsole(data: any[], tableName: string, dbPath: string) {
-        const panel = vscode.window.createWebviewPanel(
-            'queryConsole',
-            `SQL Query: ${tableName}`,
-            vscode.ViewColumn.Two,
-            { enableScripts: true, retainContextWhenHidden: true }
-        );
-
-        panel.webview.html = this.getQueryConsoleHtml(data, tableName, dbPath);
-        
-        // Handle messages from webview
-        panel.webview.onDidReceiveMessage(
-            message => {
-                switch (message.command) {
-                    case 'executeQuery':
-                        this.executeQuery(dbPath, message.query).then(result => {
-                            panel.webview.postMessage({ command: 'queryResult', data: result });
-                        }).catch(error => {
-                            panel.webview.postMessage({ command: 'queryError', error: error.toString() });
-                        });
-                        break;
-                }
-            },
-            undefined,
-            this._disposables
-        );
-    }
-
-    private getCellClass(value: any): string {
-        if (value === null || value === undefined) return 'null';
-        if (typeof value === 'boolean') return 'boolean';
-        if (typeof value === 'number') return 'number';
-        if (typeof value === 'string') return 'string';
-        return '';
-    }
-
-    private formatCellValue(value: any): string {
-        if (value === null || value === undefined) return 'null';
-        if (typeof value === 'string') return value;
-        if (typeof value === 'number') return value.toLocaleString();
-        if (typeof value === 'boolean') return value.toString();
-        if (typeof value === 'object') {
-            try {
-                return JSON.stringify(value, null, 2);
-            } catch {
-                return '[Object]';
-            }
-        }
-        return String(value);
-    }
-
     private normalizePageSize(value: unknown, fallback: number): number {
         const parsed = Number(value);
         if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -1195,1160 +1114,6 @@ Rules:
             return 1;
         }
         return Math.min(Math.floor(parsed), Math.max(1, maxPage));
-    }
-
-    private getQueryConsoleHtml(data: any[], tableName: string, dbPath: string): string {
-        return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>SQL Query - ${tableName}</title>
-            <style>
-                :root {
-                    --bg-primary: #1e1e1e;
-                    --bg-secondary: #252526;
-                    --bg-tertiary: #2d2d30;
-                    --border-color: #3e3e42;
-                    --text-primary: #cccccc;
-                    --text-secondary: #969696;
-                    --accent: #007acc;
-                    --accent-hover: #1a8ad6;
-                    --row-hover: #2a2d2e;
-                    --header-bg: #333333;
-                    --input-bg: #3c3c3c;
-                }
-
-                * {
-                    box-sizing: border-box;
-                    margin: 0;
-                    padding: 0;
-                }
-
-                body {
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    background-color: var(--bg-primary);
-                    color: var(--text-primary);
-                    font-size: 13px;
-                    line-height: 1.4;
-                    height: 100vh;
-                    display: flex;
-                    flex-direction: column;
-                    overflow: hidden;
-                }
-
-                .console-container {
-                    display: flex;
-                    flex-direction: column;
-                    height: 100%;
-                }
-
-                .console-header {
-                    background-color: var(--bg-secondary);
-                    border-bottom: 1px solid var(--border-color);
-                    padding: 12px 16px;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    flex-shrink: 0;
-                }
-
-                .console-title {
-                    font-size: 14px;
-                    font-weight: 600;
-                    color: var(--text-primary);
-                    text-transform: uppercase;
-                    letter-spacing: 0.5px;
-                }
-
-                .console-controls {
-                    display: flex;
-                    gap: 8px;
-                }
-
-                .console-btn {
-                    background-color: var(--accent);
-                    color: white;
-                    border: none;
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 12px;
-                    font-weight: 500;
-                    transition: background-color 0.2s;
-                }
-
-                .console-btn:hover {
-                    background-color: var(--accent-hover);
-                }
-
-                .console-btn-secondary {
-                    background-color: var(--bg-tertiary);
-                    color: var(--text-primary);
-                    border: 1px solid var(--border-color);
-                }
-
-                .console-btn-secondary:hover {
-                    background-color: var(--row-hover);
-                }
-
-                .query-editor {
-                    flex: 1;
-                    display: flex;
-                    flex-direction: column;
-                    min-height: 0;
-                    overflow: hidden;
-                    transition: min-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                }
-
-                .query-editor.expanded {
-                    min-height: 200px;
-                }
-
-                .query-textarea {
-                    flex: 1;
-                    background-color: var(--input-bg);
-                    border: 1px solid var(--border-color);
-                    color: var(--text-primary);
-                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-                    font-size: 12px;
-                    padding: 12px;
-                    border-radius: 4px;
-                    resize: none;
-                    outline: none;
-                    line-height: 1.5;
-                }
-
-                .query-textarea:focus {
-                    border-color: var(--accent);
-                }
-
-                .query-textarea::placeholder {
-                    color: var(--text-secondary);
-                }
-
-                .results-container {
-                    flex: 1;
-                    background-color: var(--bg-primary);
-                    overflow: auto;
-                    border-top: 1px solid var(--border-color);
-                }
-
-                .results-table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    font-size: 12px;
-                }
-
-                .results-table th,
-                .results-table td {
-                    padding: 8px 12px;
-                    text-align: left;
-                    border-bottom: 1px solid var(--border-color);
-                    vertical-align: top;
-                }
-
-                .results-table th {
-                    background-color: var(--header-bg);
-                    color: var(--text-primary);
-                    font-weight: 600;
-                    position: sticky;
-                    top: 0;
-                    z-index: 10;
-                }
-
-                .results-table tr:hover td {
-                    background-color: var(--row-hover);
-                }
-
-                .error-message {
-                    color: #ff6b6b;
-                    background-color: rgba(255, 107, 107, 0.1);
-                    padding: 12px;
-                    border-radius: 4px;
-                    border: 1px solid rgba(255, 107, 107, 0.2);
-                    margin: 12px;
-                }
-
-                .loading {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 20px;
-                    color: var(--text-secondary);
-                }
-
-                ::-webkit-scrollbar {
-                    width: 12px;
-                    height: 12px;
-                }
-
-                ::-webkit-scrollbar-track {
-                    background: var(--bg-primary);
-                }
-
-                ::-webkit-scrollbar-thumb {
-                    background: var(--border-color);
-                    border-radius: 6px;
-                }
-
-                ::-webkit-scrollbar-thumb:hover {
-                    background: #555555;
-                }
-                
-                .json-modal {
-                    position: fixed;
-                    inset: 0;
-                    z-index: 1000;
-                    display: none;
-                    align-items: center;
-                    justify-content: center;
-                    background-color: rgba(0, 0, 0, 0.7);
-                }
-                
-                .json-modal.show {
-                    display: flex;
-                }
-                
-                .json-modal-content {
-                    background-color: var(--bg-secondary);
-                    border-radius: 8px;
-                    max-width: 90%;
-                    max-height: 90vh;
-                    width: 800px;
-                    display: flex;
-                    flex-direction: column;
-                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-                }
-                
-                .json-modal-header {
-                    padding: 16px 20px;
-                    border-bottom: 1px solid var(--border-color);
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                }
-                
-                .json-modal-body {
-                    padding: 20px;
-                    overflow: auto;
-                    flex: 1;
-                }
-                
-                .json-modal-pre {
-                    margin: 0;
-                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-                    font-size: 13px;
-                    white-space: pre-wrap;
-                    color: var(--text-primary);
-                }
-                
-                .json-modal-close {
-                    background: transparent;
-                    border: none;
-                    color: var(--text-secondary);
-                    font-size: 24px;
-                    cursor: pointer;
-                    padding: 4px 8px;
-                }
-                
-                .json-modal-close:hover {
-                    color: var(--text-primary);
-                }
-                
-                .json-copy-btn {
-                    background-color: var(--accent);
-                    color: white;
-                    border: none;
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 12px;
-                    margin-left: 10px;
-                }
-                
-                .json-copy-btn:hover {
-                    background-color: var(--accent-hover);
-                }
-                
-                .results-table tr {
-                    cursor: pointer;
-                }
-                
-                .results-table tr:hover {
-                    background-color: var(--row-hover);
-                }
-            </style>
-        </head>
-        <body>
-            <div class="console-container">
-                <div class="console-header">
-                    <div class="console-title">SQL Query</div>
-                    <div class="console-controls">
-                        <button class="console-btn console-btn-secondary" onclick="clearQuery()">Clear</button>
-                        <button class="console-btn" onclick="executeQuery()">Execute</button>
-                    </div>
-                </div>
-                <div class="query-editor" id="query-editor">
-                    <textarea 
-                        class="query-textarea" 
-                        id="query-input" 
-                        placeholder="SELECT * FROM ${tableName} WHERE condition ORDER BY column LIMIT 10"
-                        spellcheck="false"
-                    ></textarea>
-                </div>
-                <div class="results-container" id="results-container">
-                    <div class="loading" id="loading" style="display: none;">
-                        Executing query...
-                    </div>
-                </div>
-            </div>
-            
-            <div class="json-modal" id="jsonModal" onclick="closeJsonModal()">
-                <div class="json-modal-content" onclick="event.stopPropagation()">
-                    <div class="json-modal-header">
-                        <div>
-                            <strong>Row Data (JSON)</strong>
-                            <button class="json-copy-btn" onclick="copyJsonToClipboard()">Copy</button>
-                        </div>
-                        <button class="json-modal-close" onclick="closeJsonModal()">×</button>
-                    </div>
-                    <div class="json-modal-body">
-                        <pre class="json-modal-pre" id="jsonContent"></pre>
-                    </div>
-                </div>
-            </div>
-            
-            <script>
-                const vscode = acquireVsCodeApi();
-                let currentResultData = [];
-                
-                function clearQuery() {
-                    document.getElementById('query-input').value = '';
-                }
-                
-                function executeQuery() {
-                    const query = document.getElementById('query-input').value.trim();
-                    if (!query) return;
-                    
-                    document.getElementById('loading').style.display = 'flex';
-                    document.getElementById('results-container').innerHTML = '';
-                    
-                    vscode.postMessage({
-                        command: 'executeQuery',
-                        query: query
-                    });
-                }
-                
-                function openJsonModal(rowIndex) {
-                    const row = currentResultData[rowIndex];
-                    const modal = document.getElementById('jsonModal');
-                    const content = document.getElementById('jsonContent');
-                    
-                    content.textContent = JSON.stringify(row, null, 2);
-                    modal.classList.add('show');
-                }
-                
-                function closeJsonModal() {
-                    document.getElementById('jsonModal').classList.remove('show');
-                }
-                
-                function copyJsonToClipboard() {
-                    const content = document.getElementById('jsonContent').textContent;
-                    navigator.clipboard.writeText(content).then(() => {
-                        const btn = event.target;
-                        const originalText = btn.textContent;
-                        btn.textContent = 'Copied!';
-                        setTimeout(() => {
-                            btn.textContent = originalText;
-                        }, 2000);
-                    }).catch(err => {
-                        console.error('Failed to copy:', err);
-                    });
-                }
-                
-                function showResults(data) {
-                    document.getElementById('loading').style.display = 'none';
-                    
-                    if (data.error) {
-                        document.getElementById('results-container').innerHTML = 
-                            '<div class="error-message">Error: ' + data.error + '</div>';
-                        return;
-                    }
-                    
-                    if (!data.data || data.data.length === 0) {
-                        document.getElementById('results-container').innerHTML = 
-                            '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">No results found</div>';
-                        return;
-                    }
-                    
-                    currentResultData = data.data;
-                    
-                    const columns = Object.keys(data.data[0]);
-                    let html = '<table class="results-table"><thead><tr>';
-                    columns.forEach(col => {
-                        html += '<th>' + col + '</th>';
-                    });
-                    html += '</tr></thead><tbody>';
-                    
-                    data.data.forEach((row, rowIndex) => {
-                        html += '<tr ondblclick="openJsonModal(' + rowIndex + ')" style="cursor: pointer;">';
-                        columns.forEach(col => {
-                            const value = row[col];
-                            let displayValue;
-                            if (value === null || value === undefined) {
-                                displayValue = 'NULL';
-                            } else if (typeof value === 'object') {
-                                // Handle arrays and objects
-                                const jsonStr = JSON.stringify(value);
-                                const escaped = jsonStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-                                displayValue = escaped;
-                            } else {
-                                const escaped = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                                displayValue = escaped;
-                            }
-                            html += '<td>' + displayValue + '</td>';
-                        });
-                        html += '</tr>';
-                    });
-                    
-                    html += '</tbody></table>';
-                    document.getElementById('results-container').innerHTML = html;
-                }
-                
-                // Handle messages from extension
-                window.addEventListener('message', event => {
-                    const message = event.data;
-                    switch (message.command) {
-                        case 'queryResult':
-                            showResults(message.data);
-                            break;
-                        case 'queryError':
-                            showResults({ error: message.error });
-                            break;
-                    }
-                });
-                
-                // Close modal on Escape key
-                document.addEventListener('keydown', (e) => {
-                    if (e.key === 'Escape') {
-                        closeJsonModal();
-                    }
-                });
-                
-                // Auto-expand query editor on focus
-                document.getElementById('query-input').addEventListener('focus', () => {
-                    document.getElementById('query-editor').classList.add('expanded');
-                });
-                
-                document.getElementById('query-input').addEventListener('blur', () => {
-                    if (!document.getElementById('query-input').value.trim()) {
-                        document.getElementById('query-editor').classList.remove('expanded');
-                    }
-                });
-            </script>
-        </body>
-        </html>`;
-    }
-
-    private getDataGridHtml(data: any[], tableName: string, totalRows: number, pageSize: number, dbType: 'sqlite' | 'mongodb'): string {
-        const columns = data.length > 0 ? Object.keys(data[0]) : [];
-        const dataJson = JSON.stringify(data);
-        const columnsJson = JSON.stringify(columns);
-
-        // Sample queries based on database type
-        const sampleQueries = dbType === 'sqlite' ? [
-            { label: 'Select All Records', query: `SELECT * FROM ${tableName} LIMIT 100` },
-            { label: 'Count Records', query: `SELECT COUNT(*) as total FROM ${tableName}` },
-            { label: 'First 10 Rows', query: `SELECT * FROM ${tableName} LIMIT 10` },
-            { label: 'Random 10 Records', query: `SELECT * FROM ${tableName} ORDER BY RANDOM() LIMIT 10` }
-        ] : [
-            { label: 'Find All Documents', query: `db.${tableName}.find({})` },
-            { label: 'Count Documents', query: `db.${tableName}.countDocuments({})` },
-            { label: 'Find First 10', query: `db.${tableName}.find({}).limit(10)` }
-        ];
-
-        const sampleOptions = sampleQueries.map(sq =>
-            `<option value="${sq.query}">${sq.label}</option>`
-        ).join('');
-
-        const queriesJson = JSON.stringify(sampleQueries.map(sq => sq.query));
-        
-        return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${tableName} - Data Browser</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class'
-        }
-    </script>
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
-    <style>
-        :root {
-            --bg-main: #f9fafb;
-            --bg-surface: #ffffff;
-            --border-color: #e5e7eb;
-            --text-main: #1f2937;
-            --text-muted: #6b7280;
-        }
-        .dark {
-            --bg-main: #000000;
-            --bg-surface: #18181b;
-            --border-color: #27272a;
-            --text-main: #ffffff;
-            --text-muted: #a1a1aa;
-        }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-        .custom-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: var(--bg-main); }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #888; border-radius: 5px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #555; }
-        .fade-in { animation: fadeIn 0.15s ease-in-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
-        th.dragging { opacity: 0.4; background-color: #e5e7eb; border: 2px dashed #9ca3af; }
-        th.drag-over-left { border-left: 3px solid #2563eb; }
-        th.drag-over-right { border-right: 3px solid #2563eb; }
-        .sort-badge { font-size: 0.65rem; height: 16px; width: 16px; line-height: 16px; text-align: center; border-radius: 50%; background-color: #dbeafe; color: #1e40af; font-weight: 700; display: inline-block; margin-left: 2px; }
-        #loadingOverlay { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(2px); }
-        .dark #loadingOverlay { background: rgba(0, 0, 0, 0.85); }
-    </style>
-</head>
-<body class="bg-gray-50 text-gray-800 h-screen flex flex-col overflow-hidden transition-colors duration-300 dark:bg-black dark:text-zinc-100">
-
-    <div id="loadingOverlay" class="fixed inset-0 z-50 flex items-center justify-center hidden">
-        <div class="flex flex-col items-center">
-            <span class="material-symbols-outlined text-4xl animate-spin text-blue-600 mb-2">progress_activity</span>
-            <span class="text-sm font-medium text-gray-600 dark:text-gray-300" id="loadingText">Processing...</span>
-        </div>
-    </div>
-
-    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm z-20 dark:bg-zinc-900 dark:border-zinc-800">
-        <div class="flex items-center gap-4">
-            <div class="flex flex-col">
-                <h1 class="text-lg font-semibold text-gray-800 leading-tight dark:text-zinc-100">
-                    <span class="material-symbols-outlined text-xl align-middle mr-2">table_view</span>
-                    ${tableName}
-                </h1>
-                <p class="text-xs text-gray-500 dark:text-zinc-500">${totalRows} total records</p>
-            </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-            <div class="relative hidden md:block group">
-                <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg dark:text-zinc-500">search</span>
-                <input id="globalSearch" type="text" placeholder="Search all columns..." class="pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-100" />
-            </div>
-            <div class="h-6 w-px bg-gray-200 mx-1 dark:bg-zinc-800"></div>
-            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="toggleQueryPanel()">
-                <span class="material-symbols-outlined text-lg">terminal</span> Query
-            </button>
-            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="toggleColumnManager(event)">
-                <span class="material-symbols-outlined text-lg">view_column</span> Columns
-            </button>
-            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="exportToCSV()">
-                <span class="material-symbols-outlined text-lg">description</span> CSV
-            </button>
-            <button class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" onclick="exportToJSON()">
-                <span class="material-symbols-outlined text-lg">code</span> JSON
-            </button>
-            <button class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800" onclick="toggleTheme()">
-                <span class="material-symbols-outlined" id="themeIcon">dark_mode</span>
-            </button>
-        </div>
-    </header>
-
-    <div class="hidden bg-white border-b border-gray-200 shadow-inner flex-shrink-0 dark:bg-zinc-900 dark:border-zinc-800" id="queryPanel">
-        <div class="p-4 max-w-7xl mx-auto">
-            <div class="flex gap-4 mb-3">
-                <select id="sampleQueries" onchange="loadSampleQuery(this.value)" class="px-3 py-2 text-sm border border-gray-300 rounded-lg dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100">
-                    <option value="">-- Sample Queries --</option>
-                    ${sampleOptions}
-                </select>
-            </div>
-            <div class="relative">
-                <textarea id="queryInput" placeholder="Enter ${dbType === 'sqlite' ? 'SQL' : 'MongoDB'} query here..." class="w-full min-h-32 p-3 font-mono text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100" spellcheck="false"></textarea>
-                <div class="mt-2 flex gap-2">
-                    <button onclick="executeCustomQuery()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Execute</button>
-                    <button onclick="clearQuery()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600">Clear</button>
-                </div>
-            </div>
-            <div class="mt-2 text-xs text-gray-500 hidden dark:text-zinc-400" id="queryStatus"></div>
-        </div>
-    </div>
-
-    <div class="px-6 py-3 bg-white border-b border-gray-200 flex items-center justify-between flex-shrink-0 dark:bg-zinc-900 dark:border-zinc-800">
-        <div class="flex items-center gap-2">
-            <span class="text-sm font-medium text-gray-600 dark:text-zinc-400" id="totalRecords">${totalRows} Records</span>
-            <span id="filterBadge" class="hidden px-2 py-1 text-xs bg-blue-100 text-blue-600 rounded-full dark:bg-blue-900 dark:text-blue-200">Filtered</span>
-            <span class="text-xs text-gray-400 ml-2 italic hidden md:inline dark:text-zinc-500">Shift+Click to multi-sort</span>
-        </div>
-        <div class="flex items-center gap-2">
-            <button onclick="clearAllFilters()" class="px-3 py-1 text-xs text-gray-600 hover:text-gray-800 dark:text-zinc-400 dark:hover:text-zinc-200">
-                <span class="material-symbols-outlined text-sm align-middle">filter_alt_off</span> Clear Filters
-            </button>
-            <button onclick="resetView()" class="px-3 py-1 text-xs text-gray-600 hover:text-gray-800 dark:text-zinc-400 dark:hover:text-zinc-200">
-                <span class="material-symbols-outlined text-sm align-middle">refresh</span> Reset
-            </button>
-        </div>
-    </div>
-
-    <div class="flex-1 overflow-auto relative custom-scrollbar bg-white dark:bg-zinc-900">
-        <table class="w-full text-left border-collapse">
-            <thead class="bg-gray-50 sticky top-0 z-10 dark:bg-zinc-800" id="tableHeaderRow"></thead>
-            <tbody class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-zinc-700 dark:text-zinc-200" id="tableBody"></tbody>
-        </table>
-        <div class="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-zinc-500 hidden" id="emptyState">
-            <span class="material-symbols-outlined text-6xl mb-2">inbox</span>
-            <p class="text-lg font-medium text-gray-500 dark:text-zinc-400">No data to display</p>
-        </div>
-    </div>
-
-    <footer class="bg-white border-t border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0 text-sm dark:bg-zinc-900 dark:border-zinc-800">
-        <div class="flex items-center gap-2 text-gray-600 dark:text-zinc-400">
-            <span>Rows:</span>
-            <select id="rowsPerPage" onchange="changeRowsPerPage(this.value)" class="px-2 py-1 border border-gray-300 rounded dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100">
-                <option value="20" selected>20</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-                <option value="500">500</option>
-            </select>
-        </div>
-        <div class="flex items-center gap-4">
-            <span class="text-gray-600 dark:text-zinc-400" id="pageInfo">Page 1 of 1</span>
-            <div class="flex gap-1">
-                <button id="btnPrev" onclick="prevPage()" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Previous</button>
-                <button id="btnNext" onclick="nextPage()" class="px-3 py-1 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Next</button>
-            </div>
-        </div>
-    </footer>
-
-    <div class="hidden absolute z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-64 text-sm fade-in dark:bg-zinc-900 dark:border-zinc-800" id="columnManager" style="top: 130px; right: 24px;">
-        <div class="p-3 border-b border-gray-200 bg-gray-50 rounded-t-lg flex justify-between items-center dark:bg-zinc-800 dark:border-zinc-700">
-            <span class="font-semibold text-gray-700 dark:text-zinc-200">Manage Columns</span>
-            <button class="text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200" onclick="toggleColumnManager(event)">×</button>
-        </div>
-        <div class="p-2 max-h-64 overflow-y-auto custom-scrollbar" id="columnList"></div>
-    </div>
-
-    <div class="hidden absolute z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-80 text-sm fade-in dark:bg-zinc-900 dark:border-zinc-800" id="filterPopover">
-        <div class="p-3 border-b border-gray-200 bg-gray-50 rounded-t-lg flex justify-between items-center dark:bg-zinc-800 dark:border-zinc-700">
-            <span class="font-semibold text-gray-700 dark:text-zinc-200" id="filterTitle">Filter Column</span>
-            <button class="text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200" onclick="closeFilterPopover()">×</button>
-        </div>
-        <div class="p-4 space-y-3" id="filterContent"></div>
-        <div class="p-3 border-t border-gray-200 bg-gray-50 rounded-b-lg flex justify-end gap-2 dark:bg-zinc-800 dark:border-zinc-700">
-            <button class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 dark:text-zinc-400" onclick="clearCurrentFilter()">Clear</button>
-            <button class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700" onclick="applyCurrentFilter()">Apply</button>
-        </div>
-    </div>
-
-    <div class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" id="jsonModal" onclick="closeJsonModal(event)">
-        <div class="bg-white dark:bg-zinc-900 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onclick="event.stopPropagation()">
-            <div class="p-4 border-b border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-800 rounded-t-lg flex justify-between items-center">
-                <h3 class="font-semibold text-lg text-gray-700 dark:text-zinc-200">
-                    <span class="material-symbols-outlined text-xl align-middle mr-2">data_object</span>
-                    Row Data (JSON)
-                </h3>
-                <div class="flex gap-2">
-                    <button onclick="copyJsonToClipboard()" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-1">
-                        <span class="material-symbols-outlined text-sm">content_copy</span> Copy
-                    </button>
-                    <button class="text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200 text-2xl" onclick="closeJsonModal(event)">×</button>
-                </div>
-            </div>
-            <div class="flex-1 overflow-auto p-4 custom-scrollbar">
-                <pre id="jsonContent" class="text-sm font-mono text-gray-800 dark:text-zinc-200 whitespace-pre-wrap"></pre>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const vscode = acquireVsCodeApi();
-        let allData = ${dataJson};
-        let filteredData = [];
-        let columns = ${columnsJson};
-        let visibleColumns = [...columns];
-        let sortConfig = [];
-        let draggedColumn = null;
-        let currentFilterCol = null;
-
-        let state = {
-            currentPage: 1,
-            rowsPerPage: ${pageSize},
-            columnFilters: {},
-            globalSearch: '',
-            darkMode: false
-        };
-
-        function initTheme() {
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            setTheme(prefersDark);
-        }
-
-        function toggleTheme() {
-            setTheme(!state.darkMode);
-        }
-
-        function setTheme(isDark) {
-            state.darkMode = isDark;
-            const html = document.documentElement;
-            const themeIcon = document.getElementById('themeIcon');
-            if (isDark) {
-                html.classList.add('dark');
-                themeIcon.textContent = 'light_mode';
-            } else {
-                html.classList.remove('dark');
-                themeIcon.textContent = 'dark_mode';
-            }
-        }
-
-        function initTable() {
-            renderHeader();
-            renderBody();
-        }
-
-        function renderHeader() {
-            const tr = document.getElementById('tableHeaderRow');
-            tr.innerHTML = '<tr>' + visibleColumns.map((col) => {
-                const sortIndex = sortConfig.findIndex(s => s.col === col);
-                const sortDir = sortIndex >= 0 ? sortConfig[sortIndex].dir : null;
-                const sortBadge = sortIndex >= 0 ? \`<span class="sort-badge">\${sortIndex + 1}</span>\` : '';
-                const sortIcon = sortDir === 'asc' ? '↑' : sortDir === 'desc' ? '↓' : '';
-                const isFiltered = state.columnFilters[col];
-                return \`<th draggable="true" ondragstart="handleDragStart(event, '\${col}')" ondragover="handleDragOver(event, '\${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '\${col}')" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-700 group" onclick="handleSort(event, '\${col}')">
-                    <div class="flex items-center justify-between">
-                        <span>\${formatColumnName(col)} \${sortIcon} \${sortBadge}</span>
-                        <button onclick="openFilter(event, '\${col}')" class="ml-2 p-1 hover:bg-gray-200 rounded dark:hover:bg-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity \${isFiltered ? '!opacity-100 bg-blue-100 dark:bg-blue-900' : ''}">
-                            <span class="material-symbols-outlined text-sm">filter_alt</span>
-                        </button>
-                    </div>
-                </th>\`;
-            }).join('') + '</tr>';
-        }
-
-        function renderBody() {
-            const tbody = document.getElementById('tableBody');
-            const emptyState = document.getElementById('emptyState');
-            
-            if (filteredData.length === 0) {
-                tbody.innerHTML = '';
-                emptyState.classList.remove('hidden');
-                return;
-            }
-            emptyState.classList.add('hidden');
-
-            const start = (state.currentPage - 1) * state.rowsPerPage;
-            const end = start + state.rowsPerPage;
-            const pageData = filteredData.slice(start, end);
-
-            tbody.innerHTML = pageData.map((row, rowIndex) => {=
-                const cells = visibleColumns.map(col => {
-                    const value = row[col];
-                    let content;
-                    let cls = '';
-                    
-                    if (value === null || value === undefined) {
-                        content = '<span class="text-gray-400 dark:text-zinc-500 italic">NULL</span>';
-                        cls = 'text-gray-400 dark:text-zinc-500';
-                    } else if (typeof value === 'boolean') {
-                        content = String(value);
-                        cls = value ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
-                    } else if (typeof value === 'number') {
-                        content = String(value);
-                        cls = 'text-blue-600 dark:text-blue-400 font-mono';
-                    } else if (typeof value === 'object') {
-                        // Handle arrays and objects
-                        const jsonStr = JSON.stringify(value);
-                        const escaped = jsonStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-                        content = '<span class="text-purple-600 dark:text-purple-400 font-mono text-xs">' + escaped + '</span>';
-                        cls = 'text-purple-600 dark:text-purple-400';
-                    } else {
-                        // Escape HTML in string values
-                        const escaped = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                        content = escaped;
-                    }
-                    
-                    return '<td class="px-6 py-3 whitespace-nowrap ' + cls + '">' + content + '</td>';
-                }).join('');
-                
-                return '<tr class="hover:bg-gray-50 dark:hover:bg-zinc-800 cursor-pointer" ondblclick="openJsonModal(' + (start + rowIndex) + ')">' + cells + '</tr>';
-            }).join('');
-        }
-
-        function handleSort(event, col) {
-            const isShift = event.shiftKey;
-            const existingIndex = sortConfig.findIndex(s => s.col === col);
-            if (isShift) {
-                if (existingIndex >= 0) {
-                    if (sortConfig[existingIndex].dir === 'asc') sortConfig[existingIndex].dir = 'desc';
-                    else sortConfig.splice(existingIndex, 1);
-                } else sortConfig.push({ col, dir: 'asc' });
-            } else {
-                if (existingIndex >= 0) {
-                    if (sortConfig[existingIndex].dir === 'asc') sortConfig = [{ col, dir: 'desc' }];
-                    else sortConfig = [];
-                } else sortConfig = [{ col, dir: 'asc' }];
-            }
-            processData();
-        }
-
-        function processData() {
-            let temp = allData.filter(row => {
-                for (let col in state.columnFilters) {
-                    const filter = state.columnFilters[col];
-                    const cellValue = row[col];
-                    const value = (typeof cellValue === 'object' ? JSON.stringify(cellValue) : String(cellValue || '')).toLowerCase();
-                    const filterValue = filter.value.toLowerCase();
-                    if (filter.op === 'contains' && !value.includes(filterValue)) return false;
-                    if (filter.op === 'equals' && value !== filterValue) return false;
-                    if (filter.op === 'starts' && !value.startsWith(filterValue)) return false;
-                    if (filter.op === 'ends' && !value.endsWith(filterValue)) return false;
-                }
-                if (state.globalSearch) {
-                    const searchLower = state.globalSearch.toLowerCase();
-                    const match = visibleColumns.some(col => {
-                        const cellValue = row[col];
-                        const value = (typeof cellValue === 'object' ? JSON.stringify(cellValue) : String(cellValue || '')).toLowerCase();
-                        return value.includes(searchLower);
-                    });
-                    if (!match) return false;
-                }
-                return true;
-            });
-
-            if (sortConfig.length > 0) {
-                temp.sort((a, b) => {
-                    for (let s of sortConfig) {
-                        const aVal = a[s.col]; const bVal = b[s.col];
-                        if (aVal < bVal) return s.dir === 'asc' ? -1 : 1;
-                        if (aVal > bVal) return s.dir === 'asc' ? 1 : -1;
-                    }
-                    return 0;
-                });
-            }
-            filteredData = temp;
-            state.currentPage = 1;
-            updateUI();
-        }
-
-        function updateUI() {
-            renderHeader();
-            renderBody();
-            renderPagination();
-            updateTotalCount();
-            const badge = document.getElementById('filterBadge');
-            if (Object.keys(state.columnFilters).length > 0 || state.globalSearch) {
-                badge.classList.remove('hidden');
-            } else {
-                badge.classList.add('hidden');
-            }
-        }
-
-        function updateTotalCount() {
-            document.getElementById('totalRecords').textContent = \`\${filteredData.length} Records\`;
-        }
-
-        function renderPagination() {
-            const totalPages = Math.ceil(filteredData.length / state.rowsPerPage) || 1;
-            document.getElementById('pageInfo').textContent = \`Page \${state.currentPage} of \${totalPages}\`;
-            document.getElementById('btnPrev').disabled = state.currentPage === 1;
-            document.getElementById('btnNext').disabled = state.currentPage === totalPages;
-        }
-
-        function nextPage() {
-            if (state.currentPage < Math.ceil(filteredData.length / state.rowsPerPage)) {
-                state.currentPage++;
-                updateUI();
-            }
-        }
-
-        function prevPage() {
-            if (state.currentPage > 1) {
-                state.currentPage--;
-                updateUI();
-            }
-        }
-
-        function changeRowsPerPage(val) {
-            state.rowsPerPage = parseInt(val);
-            state.currentPage = 1;
-            updateUI();
-        }
-
-        function formatColumnName(col) {
-            return col.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
-        }
-
-        function openFilter(event, col) {
-            event.stopPropagation();
-            currentFilterCol = col;
-            const btn = event.currentTarget;
-            const rect = btn.getBoundingClientRect();
-            const popover = document.getElementById('filterPopover');
-            let left = rect.left;
-            if (left + 320 > window.innerWidth) left = window.innerWidth - 330;
-            popover.style.top = (rect.bottom + 5) + 'px';
-            popover.style.left = left + 'px';
-
-            document.getElementById('filterTitle').textContent = \`Filter \${formatColumnName(col)}\`;
-            const current = state.columnFilters[col] || { op: 'contains', value: '' };
-
-            const html = \`
-                <select id="filterOp" class="w-full border border-gray-300 rounded-lg p-2 text-sm dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100">
-                    <option value="contains" \${current.op === 'contains' ? 'selected' : ''}>Contains</option>
-                    <option value="equals" \${current.op === 'equals' ? 'selected' : ''}>Equals</option>
-                    <option value="starts" \${current.op === 'starts' ? 'selected' : ''}>Starts With</option>
-                    <option value="ends" \${current.op === 'ends' ? 'selected' : ''}>Ends With</option>
-                </select>
-                <input type="text" id="filterVal" value="\${current.value}" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100" placeholder="Value..." autofocus>
-            \`;
-            document.getElementById('filterContent').innerHTML = html;
-            popover.classList.remove('hidden');
-            setTimeout(() => document.getElementById('filterVal').focus(), 50);
-        }
-
-        function applyCurrentFilter() {
-            const op = document.getElementById('filterOp').value;
-            const val = document.getElementById('filterVal').value;
-            if (val === '') delete state.columnFilters[currentFilterCol];
-            else state.columnFilters[currentFilterCol] = { op, value: val };
-            closeFilterPopover();
-            processData();
-        }
-
-        function clearCurrentFilter() {
-            delete state.columnFilters[currentFilterCol];
-            closeFilterPopover();
-            processData();
-        }
-
-        function closeFilterPopover() {
-            document.getElementById('filterPopover').classList.add('hidden');
-        }
-
-        function clearAllFilters() {
-            state.columnFilters = {};
-            document.getElementById('globalSearch').value = '';
-            state.globalSearch = '';
-            processData();
-        }
-
-        function toggleColumnManager(e) {
-            e.stopPropagation();
-            const el = document.getElementById('columnManager');
-            el.classList.toggle('hidden');
-            if (!el.classList.contains('hidden')) {
-                const list = document.getElementById('columnList');
-                list.innerHTML = columns.map(col => \`
-                    <label class="flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer dark:hover:bg-zinc-800">
-                        <input type="checkbox" \${visibleColumns.includes(col) ? 'checked' : ''} onchange="toggleColumn('\${col}')" class="rounded">
-                        <span class="text-sm dark:text-zinc-200">\${formatColumnName(col)}</span>
-                    </label>
-                \`).join('');
-            }
-        }
-
-        function toggleColumn(col) {
-            if (visibleColumns.includes(col)) {
-                visibleColumns = visibleColumns.filter(c => c !== col);
-            } else {
-                visibleColumns.push(col);
-                visibleColumns.sort((a, b) => columns.indexOf(a) - columns.indexOf(b));
-            }
-            initTable();
-        }
-
-        function resetView() {
-            visibleColumns = [...columns];
-            clearAllFilters();
-            sortConfig = [];
-            initTable();
-        }
-
-        function handleDragStart(e, col) {
-            draggedColumn = col;
-            e.target.closest('th').classList.add('dragging');
-        }
-
-        function handleDragOver(e, col) {
-            e.preventDefault();
-            if (draggedColumn === col) return;
-            const th = e.currentTarget;
-            const rect = th.getBoundingClientRect();
-            th.classList.remove('drag-over-left', 'drag-over-right');
-            if (e.clientX < rect.left + rect.width / 2) th.classList.add('drag-over-left');
-            else th.classList.add('drag-over-right');
-        }
-
-        function handleDragLeave(e) {
-            e.currentTarget.classList.remove('drag-over-left', 'drag-over-right');
-        }
-
-        function handleDrop(e, targetCol) {
-            e.preventDefault();
-            e.currentTarget.classList.remove('drag-over-left', 'drag-over-right');
-            document.querySelectorAll('th').forEach(th => th.classList.remove('dragging'));
-            if (draggedColumn && draggedColumn !== targetCol) {
-                const fromIdx = visibleColumns.indexOf(draggedColumn);
-                const toIdx = visibleColumns.indexOf(targetCol);
-                visibleColumns.splice(fromIdx, 1);
-                const newToIdx = visibleColumns.indexOf(targetCol);
-                const rect = e.currentTarget.getBoundingClientRect();
-                const insertIdx = e.clientX < rect.left + rect.width / 2 ? newToIdx : newToIdx + 1;
-                visibleColumns.splice(insertIdx, 0, draggedColumn);
-                initTable();
-            }
-        }
-
-        function toggleQueryPanel() {
-            document.getElementById('queryPanel').classList.toggle('hidden');
-        }
-
-        function loadSampleQuery(query) {
-            if (!query) return;
-            document.getElementById('queryInput').value = query;
-        }
-
-        function executeCustomQuery() {
-            const query = document.getElementById('queryInput').value;
-            if (!query.trim()) return;
-            const status = document.getElementById('queryStatus');
-            status.classList.remove('hidden');
-            status.innerHTML = 'Executing...';
-            
-            vscode.postMessage({
-                command: 'executeQuery',
-                query: query
-            });
-        }
-
-        function clearQuery() {
-            document.getElementById('queryInput').value = '';
-        }
-
-        function exportToCSV() {
-            if (filteredData.length === 0) return alert('No data to export');
-            const header = visibleColumns.join(',');
-            const rows = filteredData.map(row =>
-                visibleColumns.map(col => \`"\${String(row[col] || '').replace(/"/g, '""')}"\`).join(',')
-            ).join('\\n');
-            const csv = header + '\\n' + rows;
-
-            const timestamp = Math.floor(Date.now() / 1000);
-            vscode.postMessage({
-                command: 'exportCSV',
-                data: csv,
-                filename: '${tableName}_' + timestamp + '.csv'
-            });
-        }
-
-        function exportToJSON() {
-            if (filteredData.length === 0) return alert('No data to export');
-
-            // Export filtered data with visible columns only
-            const exportData = filteredData.map(row => {
-                const obj = {};
-                visibleColumns.forEach(col => {
-                    obj[col] = row[col];
-                });
-                return obj;
-            });
-
-            const timestamp = Math.floor(Date.now() / 1000);
-            vscode.postMessage({
-                command: 'exportJSON',
-                data: JSON.stringify(exportData, null, 2),
-                filename: '${tableName}_' + timestamp + '.json'
-            });
-        }
-
-        document.getElementById('globalSearch').addEventListener('input', (e) => {
-            state.globalSearch = e.target.value;
-            processData();
-        });
-
-        document.addEventListener('click', (e) => {
-            if (!document.getElementById('filterPopover').classList.contains('hidden') && 
-                !e.target.closest('#filterPopover') && !e.target.closest('button[onclick*="openFilter"]')) {
-                closeFilterPopover();
-            }
-            if (!document.getElementById('columnManager').classList.contains('hidden') && 
-                !e.target.closest('#columnManager') && !e.target.closest('button[onclick*="toggleColumnManager"]')) {
-                document.getElementById('columnManager').classList.add('hidden');
-            }
-        });
-
-        function openJsonModal(rowIndex) {
-            const row = filteredData[rowIndex];
-            const modal = document.getElementById('jsonModal');
-            const content = document.getElementById('jsonContent');
-            
-            // Format JSON with syntax highlighting
-            content.textContent = JSON.stringify(row, null, 2);
-            modal.classList.remove('hidden');
-        }
-
-        function closeJsonModal(event) {
-            if (event) {
-                event.stopPropagation();
-            }
-            document.getElementById('jsonModal').classList.add('hidden');
-        }
-
-        function copyJsonToClipboard() {
-            const content = document.getElementById('jsonContent').textContent;
-            navigator.clipboard.writeText(content).then(() => {
-                // Visual feedback
-                const btn = event.target.closest('button');
-                const originalText = btn.innerHTML;
-                btn.innerHTML = '<span class="material-symbols-outlined text-sm">check</span> Copied!';
-                setTimeout(() => {
-                    btn.innerHTML = originalText;
-                }, 2000);
-            }).catch(err => {
-                console.error('Failed to copy:', err);
-            });
-        }
-
-        // Close modal on Escape key
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeJsonModal();
-            }
-        });
-
-        // Handle messages from extension
-        window.addEventListener('message', event => {
-            const message = event.data;
-            if (message.command === 'queryResult') {
-                const status = document.getElementById('queryStatus');
-                if (message.data && message.data.length > 0) {
-                    allData = message.data;
-                    columns = Object.keys(message.data[0]);
-                    visibleColumns = [...columns];
-                    processData();
-                    status.innerHTML = \`✓ Query returned \${message.data.length} rows\`;
-                    setTimeout(() => status.classList.add('hidden'), 3000);
-                } else {
-                    status.innerHTML = '✓ Query executed successfully (no results)';
-                    setTimeout(() => status.classList.add('hidden'), 3000);
-                }
-            } else if (message.command === 'queryError') {
-                const status = document.getElementById('queryStatus');
-                status.innerHTML = '✗ Error: ' + message.error;
-            }
-        });
-
-        // Initialize
-        initTheme();
-        processData();
-    </script>
-</body>
-</html>`;
     }
 
 
@@ -2390,7 +1155,11 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
                 return [
                     new DatabaseTreeItem(null, 'No databases connected', vscode.TreeItemCollapsibleState.None, 'emptyState'),
                     new DatabaseTreeItem(null, 'Add SQLite Database', vscode.TreeItemCollapsibleState.None, 'actionButton'),
-                    new DatabaseTreeItem(null, 'Add MongoDB Connection', vscode.TreeItemCollapsibleState.None, 'actionButton')
+                    new DatabaseTreeItem(null, 'Add MongoDB Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add PostgreSQL Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add MySQL Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add Redis Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add LibSQL/Turso Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
                 ];
             }
             
@@ -2429,16 +1198,12 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
     private async fetchTableCountsAsync(connection: DatabaseItem): Promise<void> {
         try {
             connection.tableCounts = connection.tableCounts || {};
+            const countProvider = this.explorer.getProvider(connection);
             
             // Fetch counts one by one to show progress faster
             for (const table of connection.tables) {
                 try {
-                    let count = 0;
-                    if (connection.type === 'sqlite') {
-                        count = await this.explorer.sqliteManager.getTableRowCount(connection.path, table);
-                    } else {
-                        count = await this.explorer.mongoManager.getCollectionCount(connection.path, table);
-                    }
+                    const count = await countProvider.getRowCount(connection.path, table);
                     connection.tableCounts[table] = count;
                     // Refresh the tree to show updated count
                     this._onDidChangeTreeData.fire(undefined);

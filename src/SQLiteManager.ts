@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import { logger } from './logger';
+import { BaseDatabaseProvider } from './BaseDatabaseProvider';
+import type { DatabaseType, SortConfig, UpdateResult } from './types';
 
 // Lazy-loaded sqlite3 module to prevent extension activation failures
 let sqlite3Module: typeof import('@vscode/sqlite3') | null = null;
@@ -22,8 +24,17 @@ async function getSqlite3() {
     return sqlite3Module;
 }
 
-export class SQLiteManager {
-    async getTables(dbPath: string): Promise<string[]> {
+export class SQLiteManager extends BaseDatabaseProvider {
+
+    getType(): DatabaseType {
+        return 'sqlite';
+    }
+
+    async getTableNames(connectionPath: string): Promise<string[]> {
+        return this.getTablesInternal(connectionPath);
+    }
+
+    private async getTablesInternal(dbPath: string): Promise<string[]> {
         logger.debug(`Getting tables from SQLite database: ${dbPath}`);
         const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
@@ -45,7 +56,7 @@ export class SQLiteManager {
         });
     }
 
-    async getTableData(dbPath: string, tableName: string, limit?: number, offset?: number, sortConfig?: Array<{col: string, dir: 'asc' | 'desc'}>): Promise<any[]> {
+    async getTableData(dbPath: string, tableName: string, limit?: number, offset?: number, sortConfig?: SortConfig[]): Promise<any[]> {
         const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
@@ -89,7 +100,11 @@ export class SQLiteManager {
         });
     }
 
-    async getTableRowCount(dbPath: string, tableName: string): Promise<number> {
+    async getRowCount(connectionPath: string, tableName: string): Promise<number> {
+        return this.getRowCountInternal(connectionPath, tableName);
+    }
+
+    private async getRowCountInternal(dbPath: string, tableName: string): Promise<number> {
         const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
             const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
@@ -107,10 +122,14 @@ export class SQLiteManager {
         });
     }
 
-    async executeQuery(dbPath: string, query: string): Promise<any[]> {
+    async executeQuery(
+        connectionPath: string,
+        query: string,
+        _context?: { tableName?: string; limit?: number }
+    ): Promise<any[]> {
         const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
-            const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+            const db = new sqlite3.Database(connectionPath, sqlite3.OPEN_READONLY, (err) => {
                 if (err) reject(err);
             });
 
@@ -175,16 +194,16 @@ export class SQLiteManager {
     }
 
     async updateRecord(
-        dbPath: string,
+        connectionPath: string,
         tableName: string,
-        whereClause: { [column: string]: any },
-        updates: { [column: string]: any }
-    ): Promise<{ success: boolean; rowsAffected: number }> {
+        filter: Record<string, any>,
+        updates: Record<string, any>
+    ): Promise<UpdateResult> {
         const sqlite3 = await getSqlite3();
         return new Promise((resolve, reject) => {
-            const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => {
+            const db = new sqlite3.Database(connectionPath, sqlite3.OPEN_READWRITE, (err) => {
                 if (err) {
-                    logger.error(`Failed to open database for update: ${dbPath}`, err);
+                    logger.error(`Failed to open database for update: ${connectionPath}`, err);
                     reject(err);
                     return;
                 }
@@ -192,7 +211,7 @@ export class SQLiteManager {
 
             // Build UPDATE statement with parameterized queries
             const updateColumns = Object.keys(updates);
-            const whereColumns = Object.keys(whereClause);
+            const whereColumns = Object.keys(filter);
 
             if (updateColumns.length === 0) {
                 db.close();
@@ -212,7 +231,7 @@ export class SQLiteManager {
 
             const params = [
                 ...updateColumns.map(col => updates[col]),
-                ...whereColumns.map(col => whereClause[col])
+                ...whereColumns.map(col => filter[col])
             ];
 
             logger.info(`Executing UPDATE: ${sql}`, { params });
@@ -223,167 +242,62 @@ export class SQLiteManager {
                     db.close();
                     reject(err);
                 } else {
-                    const rowsAffected = this.changes;
-                    logger.info(`Updated ${rowsAffected} row(s) in ${tableName}`);
+                    const affectedCount = this.changes;
+                    logger.info(`Updated ${affectedCount} row(s) in ${tableName}`);
                     db.close();
-                    resolve({ success: true, rowsAffected });
+                    resolve({ success: true, affectedCount });
                 }
             });
         });
     }
 
-    async exportToJSON(dbPath: string, tableName: string, outputPath: string, data?: any[]): Promise<string> {
-        try {
-            const exportData = data ?? await this.getTableData(dbPath, tableName);
-            const jsonData = JSON.stringify(exportData, null, 2);
-            await fs.promises.writeFile(outputPath, jsonData, 'utf8');
-            return outputPath;
-        } catch (error) {
-            throw new Error(`Failed to export table ${tableName} to JSON: ${error}`);
-        }
-    }
+    async getRecordIdentifier(
+        connectionPath: string,
+        tableName: string,
+        rowData: Record<string, any>
+    ): Promise<Record<string, any>> {
+        const primaryKeys = await this.getTablePrimaryKeys(connectionPath, tableName);
+        const identifier: Record<string, any> = {};
 
-    async exportToCSV(dbPath: string, tableName: string, outputPath: string, data?: any[]): Promise<string> {
-        try {
-            const exportData = data ?? await this.getTableData(dbPath, tableName);
-
-            if (exportData.length === 0) {
-                throw new Error(`No data to export`);
+        if (primaryKeys.length === 0) {
+            // No primary key — use all columns except the one being updated as identifier
+            logger.warn(`Table ${tableName} has no primary key, using all values as WHERE clause`);
+            for (const key of Object.keys(rowData)) {
+                identifier[key] = rowData[key];
             }
-
-            const headers = Object.keys(exportData[0]);
-            const csvRows = [headers.join(',')];
-
-            for (const row of exportData) {
-                const values = headers.map(header => {
-                    const value = row[header];
-                    if (value === null || value === undefined) {
-                        return '';
-                    }
-                    const stringValue = String(value);
-                    if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-                        return `"${stringValue.replace(/"/g, '""')}"`;
-                    }
-                    return stringValue;
-                });
-                csvRows.push(values.join(','));
+        } else {
+            for (const pkCol of primaryKeys) {
+                if (rowData[pkCol] === undefined) {
+                    throw new Error(`Primary key column ${pkCol} not found in row data`);
+                }
+                identifier[pkCol] = rowData[pkCol];
             }
-
-            const csvData = csvRows.join('\n');
-            await fs.promises.writeFile(outputPath, csvData, 'utf8');
-            return outputPath;
-        } catch (error) {
-            throw new Error(`Failed to export table ${tableName} to CSV: ${error}`);
         }
+        return identifier;
     }
 
-    static dataToJSON(data: any[]): string {
-        return JSON.stringify(data, null, 2);
-    }
+    // Export/import — use base class implementations; override only import
 
-    static dataToCSV(data: any[]): string {
-        if (data.length === 0) {
-            return '';
-        }
-
-        const headers = Object.keys(data[0]);
-        const csvRows = [headers.join(',')];
-
-        for (const row of data) {
-            const values = headers.map(header => {
-                const value = row[header];
-                if (value === null || value === undefined) {
-                    return '';
-                }
-                const stringValue = String(value);
-                if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-                    return `"${stringValue.replace(/"/g, '""')}"`;
-                }
-                return stringValue;
-            });
-            csvRows.push(values.join(','));
-        }
-
-        return csvRows.join('\n');
-    }
-
-    async importFromJSON(dbPath: string, tableName: string, jsonPath: string): Promise<number> {
-        const content = await fs.promises.readFile(jsonPath, 'utf8');
+    async importFromJSON(connectionPath: string, tableName: string, filePath: string): Promise<number> {
+        const content = await fs.promises.readFile(filePath, 'utf8');
         const data = JSON.parse(content);
 
         if (!Array.isArray(data) || data.length === 0) {
             throw new Error('JSON file must contain a non-empty array of objects');
         }
 
-        return this.importData(dbPath, tableName, data);
+        return this.importData(connectionPath, tableName, data);
     }
 
-    async importFromCSV(dbPath: string, tableName: string, csvPath: string): Promise<number> {
-        const content = await fs.promises.readFile(csvPath, 'utf8');
-        const data = this.parseCSV(content);
+    async importFromCSV(connectionPath: string, tableName: string, filePath: string): Promise<number> {
+        const content = await fs.promises.readFile(filePath, 'utf8');
+        const data = BaseDatabaseProvider.parseCSV(content);
 
         if (data.length === 0) {
             throw new Error('CSV file is empty or has no data rows');
         }
 
-        return this.importData(dbPath, tableName, data);
-    }
-
-    private parseCSV(content: string): any[] {
-        const lines = content.split(/\r?\n/).filter(line => line.trim());
-        if (lines.length < 2) {
-            return [];
-        }
-
-        const headers = this.parseCSVLine(lines[0]);
-        const data: any[] = [];
-
-        for (let i = 1; i < lines.length; i++) {
-            const values = this.parseCSVLine(lines[i]);
-            if (values.length === headers.length) {
-                const row: any = {};
-                headers.forEach((header, idx) => {
-                    row[header] = values[idx];
-                });
-                data.push(row);
-            }
-        }
-
-        return data;
-    }
-
-    private parseCSVLine(line: string): string[] {
-        const values: string[] = [];
-        let current = '';
-        let inQuotes = false;
-
-        for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            const nextChar = line[i + 1];
-
-            if (inQuotes) {
-                if (char === '"' && nextChar === '"') {
-                    current += '"';
-                    i++;
-                } else if (char === '"') {
-                    inQuotes = false;
-                } else {
-                    current += char;
-                }
-            } else {
-                if (char === '"') {
-                    inQuotes = true;
-                } else if (char === ',') {
-                    values.push(current);
-                    current = '';
-                } else {
-                    current += char;
-                }
-            }
-        }
-        values.push(current);
-
-        return values;
+        return this.importData(connectionPath, tableName, data);
     }
 
     private async importData(dbPath: string, tableName: string, data: any[]): Promise<number> {

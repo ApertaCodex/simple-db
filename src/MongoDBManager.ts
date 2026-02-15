@@ -1,9 +1,16 @@
 import mongoose from 'mongoose';
 import { logger } from './logger';
 import * as fs from 'fs';
+import { BaseDatabaseProvider } from './BaseDatabaseProvider';
+import type { DatabaseType, SortConfig, UpdateResult } from './types';
 
-export class MongoDBManager {
-    async getCollections(connectionString: string): Promise<string[]> {
+export class MongoDBManager extends BaseDatabaseProvider {
+
+    getType(): DatabaseType {
+        return 'mongodb';
+    }
+
+    async getTableNames(connectionString: string): Promise<string[]> {
         logger.debug(`Connecting to MongoDB: ${connectionString}`);
         const connection = await mongoose.createConnection(connectionString);
         try {
@@ -22,7 +29,7 @@ export class MongoDBManager {
         }
     }
 
-    async getCollectionData(connectionString: string, collectionName: string, limit: number = 1000, offset: number = 0, sortConfig?: Array<{col: string, dir: 'asc' | 'desc'}>): Promise<any[]> {
+    async getTableData(connectionString: string, collectionName: string, limit: number = 1000, offset: number = 0, sortConfig?: SortConfig[]): Promise<any[]> {
         const connection = await mongoose.createConnection(connectionString);
         try {
             await connection.asPromise();
@@ -54,7 +61,7 @@ export class MongoDBManager {
         }
     }
 
-    async getCollectionCount(connectionString: string, collectionName: string): Promise<number> {
+    async getRowCount(connectionString: string, collectionName: string): Promise<number> {
         const connection = await mongoose.createConnection(connectionString);
         try {
             await connection.asPromise();
@@ -69,7 +76,73 @@ export class MongoDBManager {
         }
     }
 
-    async executeQuery(connectionString: string, collectionName: string, filter: any = {}, limit: number = 1000): Promise<any[]> {
+    async executeQuery(
+        connectionString: string,
+        query: string,
+        context?: { tableName?: string; limit?: number }
+    ): Promise<any[]> {
+        const collectionName = context?.tableName;
+        if (!collectionName) {
+            throw new Error('Collection name is required for MongoDB queries (pass context.tableName)');
+        }
+        const limit = context?.limit ?? 1000;
+
+        // Parse the query string — supports JSON filter or db.collection.find() syntax
+        query = query.trim();
+
+        const findMatch = query.match(/db\.\w+\.find\((.*)\)/);
+        const countMatch = query.match(/db\.\w+\.(?:countDocuments|count)\((.*)\)/);
+        const aggregateMatch = query.match(/db\.\w+\.aggregate\((.*)\)/);
+
+        let filter: any = {};
+
+        if (findMatch) {
+            const filterStr = findMatch[1].trim();
+            if (filterStr && filterStr !== '{}') {
+                filter = this.parseFilterString(filterStr);
+            }
+            return this.executeFilterQuery(connectionString, collectionName, filter, limit);
+        } else if (countMatch) {
+            const filterStr = countMatch[1].trim();
+            if (filterStr && filterStr !== '{}') {
+                filter = this.parseFilterString(filterStr);
+            }
+            const count = await this.getRowCount(connectionString, collectionName);
+            return [{ count }];
+        } else if (aggregateMatch) {
+            throw new Error('Aggregate queries are not yet supported. Use find() queries.');
+        } else {
+            // Try to parse as a plain filter object
+            if (query === '' || query === '{}') {
+                filter = {};
+            } else {
+                filter = this.parseFilterString(query);
+            }
+            return this.executeFilterQuery(connectionString, collectionName, filter, limit);
+        }
+    }
+
+    private parseFilterString(filterStr: string): any {
+        // Try JSON first, then eval as JS object literal
+        try {
+            return JSON.parse(filterStr);
+        } catch {
+            try {
+                return eval('(' + filterStr + ')');
+            } catch {
+                throw new Error(
+                    'Invalid query format. Use MongoDB find() syntax: db.collection.find({field: "value"}) or JSON filter: {"field": "value"}'
+                );
+            }
+        }
+    }
+
+    private async executeFilterQuery(
+        connectionString: string,
+        collectionName: string,
+        filter: any,
+        limit: number
+    ): Promise<any[]> {
         const connection = await mongoose.createConnection(connectionString);
         try {
             await connection.asPromise();
@@ -85,12 +158,12 @@ export class MongoDBManager {
         }
     }
 
-    async updateDocument(
+    async updateRecord(
         connectionString: string,
         collectionName: string,
-        filter: any,
-        update: { [field: string]: any }
-    ): Promise<{ success: boolean; modifiedCount: number }> {
+        filter: Record<string, any>,
+        updates: Record<string, any>
+    ): Promise<UpdateResult> {
         const connection = await mongoose.createConnection(connectionString);
         try {
             await connection.asPromise();
@@ -104,14 +177,14 @@ export class MongoDBManager {
                 throw new Error('Filter is required for safety - cannot update all documents');
             }
 
-            if (!update || Object.keys(update).length === 0) {
+            if (!updates || Object.keys(updates).length === 0) {
                 throw new Error('No fields to update');
             }
 
             const collection = db.collection(collectionName);
             
             // Use $set operator to update specific fields
-            const updateOperation = { $set: update };
+            const updateOperation = { $set: updates };
             
             logger.info(`Updating document in ${collectionName}`, { filter, update: updateOperation });
             
@@ -121,7 +194,7 @@ export class MongoDBManager {
             
             return {
                 success: true,
-                modifiedCount: result.modifiedCount
+                affectedCount: result.modifiedCount
             };
         } catch (error) {
             logger.error(`Failed to update document in ${collectionName}`, error);
@@ -131,62 +204,43 @@ export class MongoDBManager {
         }
     }
 
-    async exportToJSON(connectionString: string, collectionName: string, outputPath: string, data?: any[]): Promise<string> {
-        try {
-            const exportData = data ?? await this.getCollectionData(connectionString, collectionName);
-            const jsonData = JSON.stringify(exportData, null, 2);
-            await fs.promises.writeFile(outputPath, jsonData, 'utf8');
-            logger.info(`Exported ${exportData.length} documents from ${collectionName} to ${outputPath}`);
-            return outputPath;
-        } catch (error) {
-            logger.error(`Failed to export collection ${collectionName} to JSON`, error);
-            throw new Error(`Failed to export collection ${collectionName} to JSON: ${error}`);
+    async getRecordIdentifier(
+        _connectionPath: string,
+        _tableName: string,
+        rowData: Record<string, any>
+    ): Promise<Record<string, any>> {
+        if (!rowData._id) {
+            throw new Error('MongoDB document must have _id field');
         }
+        return { _id: rowData._id };
     }
 
-    async exportToCSV(connectionString: string, collectionName: string, outputPath: string, data?: any[]): Promise<string> {
-        try {
-            const exportData = data ?? await this.getCollectionData(connectionString, collectionName);
+    // Override exportToCSV to flatten nested objects before writing
+    async exportToCSV(
+        connectionString: string,
+        collectionName: string,
+        outputPath: string,
+        data?: any[]
+    ): Promise<string> {
+        const exportData = data ?? await this.getTableData(connectionString, collectionName);
 
-            if (exportData.length === 0) {
-                throw new Error(`No data to export`);
-            }
-
-            // Flatten nested objects and arrays for CSV
-            const flattenedData = exportData.map(doc => this.flattenObject(doc));
-
-            // Get all unique keys from all documents
-            const allKeys = new Set<string>();
-            flattenedData.forEach(doc => {
-                Object.keys(doc).forEach(key => allKeys.add(key));
-            });
-
-            const headers = Array.from(allKeys);
-            const csvRows = [headers.join(',')];
-
-            for (const row of flattenedData) {
-                const values = headers.map(header => {
-                    const value = row[header];
-                    if (value === null || value === undefined) {
-                        return '';
-                    }
-                    const stringValue = String(value);
-                    if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-                        return `"${stringValue.replace(/"/g, '""')}"`;
-                    }
-                    return stringValue;
-                });
-                csvRows.push(values.join(','));
-            }
-
-            const csvData = csvRows.join('\n');
-            await fs.promises.writeFile(outputPath, csvData, 'utf8');
-            logger.info(`Exported ${exportData.length} documents from ${collectionName} to ${outputPath}`);
-            return outputPath;
-        } catch (error) {
-            logger.error(`Failed to export collection ${collectionName} to CSV`, error);
-            throw new Error(`Failed to export collection ${collectionName} to CSV: ${error}`);
+        if (exportData.length === 0) {
+            throw new Error('No data to export');
         }
+
+        // Flatten nested objects and arrays for CSV
+        const flattenedData = exportData.map(doc => this.flattenObject(doc));
+
+        // Get all unique keys from all documents
+        const allKeys = new Set<string>();
+        flattenedData.forEach(doc => {
+            Object.keys(doc).forEach(key => allKeys.add(key));
+        });
+
+        const headers = Array.from(allKeys);
+        await BaseDatabaseProvider.writeCSVFile(outputPath, headers, flattenedData);
+        logger.info(`Exported ${exportData.length} documents from ${collectionName} to ${outputPath}`);
+        return outputPath;
     }
 
     private flattenObject(obj: any, prefix: string = ''): any {
