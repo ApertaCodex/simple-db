@@ -436,6 +436,75 @@ export class DatabaseExplorer {
         }
     }
 
+    async editConnection(item: DatabaseTreeItem) {
+        if (!item.connection) {
+            return;
+        }
+
+        const connection = this.connections.find(c => c.name === item.connection!.name);
+        if (!connection) {
+            return;
+        }
+
+        const newName = await vscode.window.showInputBox({
+            prompt: 'Enter connection name',
+            value: connection.name
+        });
+
+        if (!newName) {
+            return;
+        }
+
+        let newPath: string | undefined;
+
+        if (connection.type === 'sqlite') {
+            const uri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                defaultUri: vscode.Uri.file(connection.path),
+                filters: { 'SQLite Database': ['db', 'sqlite', 'sqlite3'] }
+            });
+            newPath = uri?.[0]?.fsPath;
+        } else {
+            const promptMap: Record<string, string> = {
+                mongodb: 'Enter MongoDB connection string',
+                postgresql: 'Enter PostgreSQL connection string',
+                mysql: 'Enter MySQL connection string',
+                redis: 'Enter Redis connection string',
+                libsql: 'Enter LibSQL/Turso connection string'
+            };
+            newPath = await vscode.window.showInputBox({
+                prompt: promptMap[connection.type] || 'Enter connection string',
+                value: connection.path
+            });
+        }
+
+        if (!newPath) {
+            return;
+        }
+
+        const pathChanged = newPath !== connection.path;
+        const oldName = connection.name;
+
+        try {
+            if (pathChanged) {
+                const provider = this.getProvider(connection);
+                connection.tables = await provider.getTableNames(newPath);
+                connection.countsLoaded = false;
+                connection.tableCounts = {};
+            }
+
+            connection.name = newName;
+            connection.path = newPath;
+            this.saveConnections();
+            this._treeDataProvider.refresh();
+            logger.info(`Connection "${oldName}" updated to "${newName}"`);
+            vscode.window.showInformationMessage(`Connection "${newName}" updated successfully`);
+        } catch (error) {
+            logger.error(`Failed to update connection "${oldName}"`, error);
+            vscode.window.showErrorMessage(`Failed to update connection: ${error}`);
+        }
+    }
+
     async viewData(item: DatabaseTreeItem) {
         if (!item.connection) {
             vscode.window.showErrorMessage('No database connection available');
@@ -573,14 +642,6 @@ export class DatabaseExplorer {
                                 panel.webview.postMessage({
                                     command: 'aiQueryError',
                                     error: 'Database not found'
-                                });
-                                return;
-                            }
-                            
-                            if (currentDb.type !== 'sqlite') {
-                                panel.webview.postMessage({
-                                    command: 'aiQueryError',
-                                    error: 'AI query generation is currently only supported for SQLite databases'
                                 });
                                 return;
                             }
@@ -923,35 +984,19 @@ export class DatabaseExplorer {
                 }
             }
 
-            // Get table schema for context
+            // Get table schema and sample data for context — works for all providers
             let tableSchema = '';
             let sampleData = '';
-            if (connection.type === 'sqlite') {
-                const aiProvider = this.getProvider(connection);
-                const tableData = await aiProvider.getTableData(connection.path, tableName, 3, 0);
-                if (tableData.length > 0) {
-                    const columns = Object.keys(tableData[0]);
-                    tableSchema = `Table: ${tableName}\nColumns: ${columns.join(', ')}`;
-                    // Include sample data to help AI understand column types/values
-                    sampleData = `\nSample data (first ${tableData.length} rows):\n${JSON.stringify(tableData, null, 2)}`;
-                }
+            const aiProvider = this.getProvider(connection);
+            const tableData = await aiProvider.getTableData(connection.path, tableName, 3, 0);
+            if (tableData.length > 0) {
+                const columns = Object.keys(tableData[0]);
+                tableSchema = `Table/Collection: ${tableName}\nColumns/Fields: ${columns.join(', ')}`;
+                sampleData = `\nSample data (first ${tableData.length} rows/documents):\n${JSON.stringify(tableData, null, 2)}`;
             }
 
-            const systemPrompt = `You are a SQL expert. The user is currently viewing the "${tableName}" table. Convert their natural language query to SQL for this specific table.
-
-${tableSchema}${sampleData}
-
-Rules:
-- ALWAYS use the table "${tableName}" - the user is looking at this table right now
-- Only return the raw SQL query, nothing else
-- Use proper SQLite syntax
-- Do not include markdown formatting or code blocks
-- Do not include explanations or comments
-- If the user asks to "show all", "get everything", use SELECT * FROM ${tableName}
-- If the user mentions filtering, use WHERE clauses
-- If the user mentions sorting, use ORDER BY
-- If the user mentions counting or aggregating, use appropriate aggregate functions
-- Default to LIMIT 100 unless user specifies otherwise`;
+            // Build per-engine system prompt
+            const systemPrompt = this.buildAISystemPrompt(connection.type, tableName, tableSchema, sampleData);
 
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
@@ -981,18 +1026,125 @@ Rules:
             }
 
             const data = await response.json() as any;
-            let sqlQuery = data.choices?.[0]?.message?.content?.trim();
+            let query = data.choices?.[0]?.message?.content?.trim();
             
-            if (!sqlQuery) {
-                throw new Error('No SQL query generated');
+            if (!query) {
+                throw new Error('No query generated');
             }
 
             // Clean up any markdown formatting that might have slipped through
-            sqlQuery = sqlQuery.replace(/^```sql\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+            query = query.replace(/^```(?:sql|js|json|redis)?\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
 
-            return sqlQuery;
+            return query;
         } catch (error) {
             throw new Error(`AI query generation failed: ${error}`);
+        }
+    }
+
+    /**
+     * Build the AI system prompt appropriate for each database engine.
+     */
+    private buildAISystemPrompt(
+        dbType: DatabaseType,
+        tableName: string,
+        tableSchema: string,
+        sampleData: string
+    ): string {
+        const commonRules = `- Only return the raw query, nothing else
+- Do not include markdown formatting or code blocks
+- Do not include explanations or comments`;
+
+        switch (dbType) {
+            case 'sqlite':
+            case 'libsql':
+                return `You are a SQL expert. The user is currently viewing the "${tableName}" table. Convert their natural language query to SQL for this specific table.
+
+${tableSchema}${sampleData}
+
+Rules:
+- ALWAYS use the table "${tableName}" - the user is looking at this table right now
+${commonRules}
+- Use proper SQLite syntax
+- If the user asks to "show all", "get everything", use SELECT * FROM "${tableName}"
+- If the user mentions filtering, use WHERE clauses
+- If the user mentions sorting, use ORDER BY
+- If the user mentions counting or aggregating, use appropriate aggregate functions
+- Default to LIMIT 100 unless user specifies otherwise`;
+
+            case 'postgresql':
+                return `You are a PostgreSQL expert. The user is currently viewing the "${tableName}" table. Convert their natural language query to SQL for this specific table.
+
+${tableSchema}${sampleData}
+
+Rules:
+- ALWAYS use the table "${tableName}" - the user is looking at this table right now
+${commonRules}
+- Use proper PostgreSQL syntax (e.g., $1 placeholders are NOT needed — write literal values)
+- Quote identifiers with double quotes when they contain special characters
+- If the user asks to "show all", "get everything", use SELECT * FROM "${tableName}"
+- If the user mentions filtering, use WHERE clauses
+- If the user mentions sorting, use ORDER BY
+- If the user mentions counting or aggregating, use appropriate aggregate functions
+- You may use PostgreSQL-specific features like ILIKE, array operators, CTEs, window functions when appropriate
+- Default to LIMIT 100 unless user specifies otherwise`;
+
+            case 'mysql':
+                return `You are a MySQL expert. The user is currently viewing the "${tableName}" table. Convert their natural language query to SQL for this specific table.
+
+${tableSchema}${sampleData}
+
+Rules:
+- ALWAYS use the table "${tableName}" - the user is looking at this table right now
+${commonRules}
+- Use proper MySQL syntax
+- Quote identifiers with backticks when they contain special characters
+- If the user asks to "show all", "get everything", use SELECT * FROM \`${tableName}\`
+- If the user mentions filtering, use WHERE clauses
+- If the user mentions sorting, use ORDER BY
+- If the user mentions counting or aggregating, use appropriate aggregate functions
+- Default to LIMIT 100 unless user specifies otherwise`;
+
+            case 'mongodb':
+                return `You are a MongoDB expert. The user is currently viewing the "${tableName}" collection. Convert their natural language query to a MongoDB query for this specific collection.
+
+${tableSchema}${sampleData}
+
+Rules:
+- ALWAYS target the collection "${tableName}" - the user is looking at this collection right now
+${commonRules}
+- Return a MongoDB find() query using the syntax: db.${tableName}.find({filter})
+- For counting, use: db.${tableName}.countDocuments({filter})
+- Use proper MongoDB query operators ($gt, $lt, $gte, $lte, $ne, $in, $regex, $exists, etc.)
+- If the user asks to "show all", "get everything", use db.${tableName}.find({})
+- If the user mentions filtering, use appropriate filter objects
+- If the user mentions sorting, append .sort({field: 1}) or .sort({field: -1})
+- For text matching, prefer $regex with case-insensitive flag
+- Default to .limit(100) unless user specifies otherwise`;
+
+            case 'redis':
+                return `You are a Redis expert. The user is currently viewing keys under the "${tableName}" prefix. Convert their natural language query to a Redis command.
+
+${tableSchema}${sampleData}
+
+Rules:
+- The current key prefix/group is "${tableName}"
+${commonRules}
+- Return a single raw Redis command (e.g., GET key, KEYS pattern, SCAN 0 MATCH pattern, HGETALL key, etc.)
+- If the user asks to "show all" or "get everything", use: KEYS ${tableName === '__no_prefix__' ? '*' : tableName + ':*'}
+- If the user asks about a specific key, use the appropriate command for its type (GET, HGETALL, LRANGE, SMEMBERS, ZRANGE)
+- If the user mentions searching or filtering keys, use: SCAN 0 MATCH ${tableName === '__no_prefix__' ? '' : tableName + ':'}*pattern* COUNT 100
+- For counting keys, use: SCAN 0 MATCH ${tableName === '__no_prefix__' ? '*' : tableName + ':*'} COUNT 1000
+- Keep commands simple and safe (read-only preferred unless user explicitly asks to write)`;
+
+            default:
+                return `You are a database expert. The user is currently viewing "${tableName}". Convert their natural language query to the appropriate query syntax.
+
+${tableSchema}${sampleData}
+
+Rules:
+${commonRules}
+- Target "${tableName}" in your query
+- Default to returning up to 100 results unless user specifies otherwise`;
         }
     }
     

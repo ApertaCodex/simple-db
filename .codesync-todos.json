@@ -1,0 +1,26 @@
+{
+  "todos": [
+    {
+      "content": "Remove SQLite-only guard in generateAIQuery message handler",
+      "status": "completed",
+      "active_form": "Removing SQLite-only guard in generateAIQuery message handler",
+      "created_at": "2026-02-19T00:00:51.133115Z",
+      "updated_at": "2026-02-19T00:01:08.237702Z"
+    },
+    {
+      "content": "Refactor generateAIQueryForTable to support all database types",
+      "status": "completed",
+      "active_form": "Refactoring generateAIQueryForTable to support all database types",
+      "created_at": "2026-02-19T00:00:51.133115Z",
+      "updated_at": "2026-02-19T00:01:48.343056Z"
+    },
+    {
+      "content": "Build and verify compilation",
+      "status": "completed",
+      "active_form": "Building and verifying compilation",
+      "created_at": "2026-02-19T00:00:51.133115Z",
+      "updated_at": "2026-02-19T00:02:13.281937Z"
+    }
+  ],
+  "updated_at": "2026-02-19T00:02:13.281937Z"
+}

@@ -204,6 +204,14 @@ export function activate(context: vscode.ExtensionContext) {
                 outputChannel.appendLine(`[${new Date().toISOString()}] refresh error: ${error}`);
             }
         }),
+        vscode.commands.registerCommand('simpleDB.editConnection', async (item) => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                databaseExplorer.editConnection(item);
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error editing connection: ${error}`);
+            }
+        }),
         vscode.commands.registerCommand('simpleDB.removeConnection', async (item) => {
             try {
                 const { databaseExplorer } = await getManagers();

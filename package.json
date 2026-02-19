@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, and LibSQL/Turso databases in VS Code",
-    "version": "3.0.0",
+    "version": "3.0.2",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -119,6 +119,11 @@
                 "icon": "$(refresh)"
             },
             {
+                "command": "simpleDB.editConnection",
+                "title": "Edit Connection",
+                "icon": "$(edit)"
+            },
+            {
                 "command": "simpleDB.removeConnection",
                 "title": "Remove Connection"
             },
@@ -230,6 +235,11 @@
                 }
             ],
             "view/item/context": [
+                {
+                    "command": "simpleDB.editConnection",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "inline"
+                },
                 {
                     "command": "simpleDB.removeConnection",
                     "when": "view == databaseExplorer && viewItem == connection",
