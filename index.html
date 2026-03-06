@@ -1258,9 +1258,16 @@
                 [...defaults, ...filtered].map(q => `<option value="${q.sql.replace(/"/g, '&quot;')}">${q.label}</option>`).join('');
         }
 
+        function setQueryInput(text) {
+            const el = document.getElementById('queryInput');
+            el.focus();
+            el.select();
+            document.execCommand('insertText', false, text);
+        }
+
         function loadSampleQuery(val) {
             if (!val) return;
-            document.getElementById('queryInput').value = val;
+            setQueryInput(val);
             setQueryMode('sql');
         }
 
@@ -1271,6 +1278,14 @@
             status.classList.remove('hidden');
 
             const isAiMode = document.getElementById('modeAi').classList.contains('bg-white');
+
+            if (!isAiMode && !state.editMode) {
+                const mutatingPattern = /^\s*(DELETE|UPDATE|DROP|ALTER|INSERT|REPLACE)\b/i;
+                if (mutatingPattern.test(sql.trim())) {
+                    status.innerHTML = '⚠ This query modifies data. Please enable Edit Mode first.';
+                    return;
+                }
+            }
             if (isAiMode) {
                 if (isVSCodeWebview && vscode) {
                     // Send AI query request to VS Code extension with current table context
@@ -1285,7 +1300,7 @@
                     status.innerHTML = '✨ Generating SQL...';
                     try {
                         const finalSql = await generateAIQuery(sql);
-                        document.getElementById('queryInput').value = finalSql;
+                        setQueryInput(finalSql);
                         setQueryMode('sql');
                         status.innerHTML = '✓ SQL generated. Click Run to execute.';
                     } catch (e) { status.innerHTML = "AI Error: " + e.message; }
@@ -1443,15 +1458,18 @@
                 let cls = 'text-gray-700 dark:text-zinc-300';
                 const stats = columnStats[col];
                 
-                // Determine if cell is editable (not for complex formatted values)
-                const isEditableType = val === null || val === undefined ||
-                    typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean';
-                const editableClass = state.editMode && isEditableType ? 'editable-cell' : '';
-                const editableAttr = state.editMode && isEditableType ? `ondblclick="enterEditMode(event, ${dataRowIndex}, '${col}')"` : '';
-                const dataValue = val !== null && val !== undefined ? String(val).replace(/"/g, '&quot;') : '';
+                // Determine if cell is editable
+                const isObjectVal = typeof val === 'object' && val !== null;
+                const editableClass = state.editMode ? 'editable-cell' : '';
+                const editableAttr = (state.editMode || isObjectVal) ? `onclick="enterEditMode(event, ${dataRowIndex}, '${col}')"` : '';
+                const dataValue = val !== null && val !== undefined ? (isObjectVal ? JSON.stringify(val) : String(val)).replace(/"/g, '&quot;') : '';
 
                 if (val === null || val === undefined) {
                     content = '<span class="text-gray-300 dark:text-zinc-700 italic">null</span>';
+                } else if (typeof val === 'object') {
+                    const json = JSON.stringify(val);
+                    const escaped = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    content = `<span class="font-mono text-xs">${escaped}</span>`;
                 } else if (stats && stats.isEnum) {
                     const color = stats.colorMap[val] || { bg: 'bg-gray-100', text: 'text-gray-800', darkBg: 'dark:bg-zinc-800', darkText: 'dark:text-zinc-300' };
                     content = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${color.bg} ${color.text} ${color.darkBg} ${color.darkText}">${val}</span>`;
@@ -1498,13 +1516,13 @@
             let temp = allData.filter(row => {
                 if (state.globalSearch) {
                     const term = state.globalSearch.toLowerCase();
-                    if (!Object.values(row).some(val => String(val).toLowerCase().includes(term))) return false;
+                    if (!Object.values(row).some(val => (typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val)).toLowerCase().includes(term))) return false;
                 }
                 for (const [col, filter] of Object.entries(state.columnFilters)) {
                     let val = row[col];
                     const { value, op, value2 } = filter;
                     if (val === null || val === undefined) return false;
-                    const sVal = String(val).toLowerCase();
+                    const sVal = (typeof val === 'object' ? JSON.stringify(val) : String(val)).toLowerCase();
                     const sFVal = String(value).toLowerCase();
 
                     if (op === 'contains' && !sVal.includes(sFVal)) return false;
@@ -1723,11 +1741,15 @@
             }
         }
 
-        function clearQuery() { document.getElementById('queryInput').value = ''; }
+        function clearQuery() { setQueryInput(''); }
         function exportData() {
             if (filteredData.length === 0) return alert("No data");
             const header = visibleColumns.join(",");
-            const rows = filteredData.map(row => visibleColumns.map(col => `"${String(row[col] || '').replace(/"/g, '""')}"`).join(",")).join("\n");
+            const rows = filteredData.map(row => visibleColumns.map(col => {
+                const v = row[col];
+                const s = v !== null && v !== undefined ? (typeof v === 'object' ? JSON.stringify(v) : String(v)) : '';
+                return `"${s.replace(/"/g, '""')}"`;
+            }).join(",")).join("\n");
             const csvData = header + "\n" + rows;
             
             if (isVSCodeWebview && vscode) {
@@ -1777,15 +1799,17 @@
         }
 
         function enterEditMode(event, rowIndex, columnName) {
-            if (!state.editMode) return;
+            const cell = event.currentTarget;
+            const currentValue = cell.dataset.value || '';
+            const isObject = currentValue.startsWith('{') || currentValue.startsWith('[');
+            
+            // Allow object cells to open readonly textarea even in read-only mode
+            if (!state.editMode && !isObject) return;
             
             // Cancel any existing edit
             if (state.currentEdit) {
                 cancelEdit();
             }
-            
-            const cell = event.currentTarget;
-            const currentValue = cell.dataset.value || '';
             
             // Store edit state
             state.currentEdit = {
@@ -1796,10 +1820,18 @@
                 originalHTML: cell.innerHTML
             };
             
-            // Create input field
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = currentValue;
+            // Create input: use textarea for object fields, input for others
+            let input;
+            if (isObject) {
+                input = document.createElement('textarea');
+                input.rows = 12;
+                input.readOnly = true;
+                input.value = JSON.stringify(JSON.parse(currentValue), null, 2);
+            } else {
+                input = document.createElement('input');
+                input.type = 'text';
+                input.value = currentValue;
+            }
             input.className = 'cell-edit-input';
             
             // Replace cell content with input
@@ -1809,13 +1841,17 @@
             
             // Focus and select text
             input.focus();
-            input.select();
+            if (state.editMode) {
+                input.select();
+            }
             
-            // Handle save on Enter
+            // Handle save on Enter (for input; textarea uses Ctrl+Enter)
             input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && (input.tagName === 'INPUT' || e.ctrlKey)) {
                     e.preventDefault();
-                    saveEdit(input.value);
+                    let val = input.value;
+                    if (isObject) { try { val = JSON.stringify(JSON.parse(val)); } catch(err) {} }
+                    saveEdit(val);
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
                     cancelEdit();
@@ -1826,7 +1862,9 @@
             input.addEventListener('blur', () => {
                 setTimeout(() => {
                     if (state.currentEdit && state.currentEdit.cell === cell) {
-                        saveEdit(input.value);
+                        let val = input.value;
+                        if (isObject) { try { val = JSON.stringify(JSON.parse(val)); } catch(err) {} }
+                        saveEdit(val);
                     }
                 }, 100);
             });
@@ -1953,7 +1991,7 @@
                         break;
 
                     case 'aiQueryResult':
-                        document.getElementById('queryInput').value = message.sqlQuery;
+                        setQueryInput(message.sqlQuery);
                         setQueryMode('sql');
                         if (status) {
                             status.classList.remove('hidden');
@@ -2168,6 +2206,25 @@
         }
 
         document.getElementById('globalSearch').addEventListener('input', (e) => { state.globalSearch = e.target.value; processData(); });
+        document.getElementById('queryInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                executeCustomQuery();
+            }
+        });
+
+        // Copy handler: ensure cells copy proper values, not [object Object]
+        document.addEventListener('copy', (e) => {
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed) return;
+            const anchor = sel.anchorNode;
+            if (!anchor) return;
+            const td = anchor.nodeType === 1 ? anchor.closest('td') : anchor.parentElement?.closest('td');
+            if (td && td.dataset.value !== undefined) {
+                e.preventDefault();
+                e.clipboardData.setData('text/plain', td.dataset.value);
+            }
+        });
         document.addEventListener('click', (e) => {
             if (!document.getElementById('filterPopover').classList.contains('hidden') && !e.target.closest('#filterPopover') && !e.target.closest('button[onclick*="openFilter"]')) closeFilterPopover();
             if (!document.getElementById('columnManager').classList.contains('hidden') && !e.target.closest('#columnManager') && !e.target.closest('button[onclick*="toggleColumnManager"]')) document.getElementById('columnManager').classList.add('hidden');

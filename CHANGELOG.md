@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.4] - 2026-03-06
+
+### Added
+- Query textarea preserves undo/redo history (Ctrl+Z / Ctrl+Shift+Z)
+- Enter key executes query, Shift+Enter inserts newline
+- Read-only mode guard blocks mutating queries (DELETE, UPDATE, DROP, etc.)
+- Object/JSON cell values rendered inline with monospace formatting
+- Click object cells to expand into a readonly textarea preview
+- Single-click cell editing (was double-click)
+- Object fields editable via textarea with Ctrl+Enter to save
+- Copy handler outputs proper JSON for object cells instead of `[object Object]`
+- CSV export serializes object values as JSON strings
+
+### Fixed
+- PostgreSQL circular reference crash (`Converting circular structure to JSON`) when viewing tables
+- Cell copy producing `[object Object]` for complex data types
+
 ## [3.0.3] - 2026-03-06
 
 ### Fixed
