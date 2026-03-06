@@ -1494,7 +1494,7 @@
             }
         }
 
-        function processData() {
+        function processData(resetPage = true) {
             let temp = allData.filter(row => {
                 if (state.globalSearch) {
                     const term = state.globalSearch.toLowerCase();
@@ -1530,7 +1530,9 @@
                 });
             }
             filteredData = temp;
-            state.currentPage = 1;
+            if (resetPage) {
+                state.currentPage = 1;
+            }
             updateUI();
             saveToCache();
         }
@@ -1984,7 +1986,7 @@
                                 visibleColumns = [...columns];
                             }
                             analyzeColumns();
-                            processData();
+                            processData(false);
                             initTable();
                         }
                         document.getElementById('loadingOverlay')?.classList.add('hidden');
