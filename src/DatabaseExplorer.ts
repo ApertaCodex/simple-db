@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { logger } from './logger';
+import { BaseDatabaseProvider } from './BaseDatabaseProvider';
 import type { IDatabaseProvider, DatabaseItem, DatabaseType, TableSettings } from './types';
 
 /** Resolve the per-provider SVG icon path (works for both light & dark themes). */
@@ -992,7 +993,7 @@ export class DatabaseExplorer {
             if (tableData.length > 0) {
                 const columns = Object.keys(tableData[0]);
                 tableSchema = `Table/Collection: ${tableName}\nColumns/Fields: ${columns.join(', ')}`;
-                sampleData = `\nSample data (first ${tableData.length} rows/documents):\n${JSON.stringify(tableData, null, 2)}`;
+                sampleData = `\nSample data (first ${tableData.length} rows/documents):\n${JSON.stringify(BaseDatabaseProvider.sanitizeRows(tableData), null, 2)}`;
             }
 
             // Build per-engine system prompt

@@ -105,6 +105,34 @@ export abstract class BaseDatabaseProvider implements IDatabaseProvider {
 	// ------------------------------------------------------------------
 
 	/**
+	 * Deep-clone an array of row objects, replacing circular references
+	 * and non-serializable values (e.g. Node.js internal objects like
+	 * TLSSocket, Buffer subclasses) with null.
+	 *
+	 * This prevents "Converting circular structure to JSON" crashes
+	 * when row data is passed to JSON.stringify or postMessage.
+	 */
+	static sanitizeRows(rows: any[]): any[] {
+		const seen = new WeakSet();
+		function replacer(_key: string, value: any): any {
+			if (typeof value === 'object' && value !== null) {
+				if (seen.has(value)) {
+					return null;
+				}
+				seen.add(value);
+			}
+			if (typeof value === 'bigint') {
+				return value.toString();
+			}
+			if (typeof value === 'function' || typeof value === 'symbol') {
+				return null;
+			}
+			return value;
+		}
+		return JSON.parse(JSON.stringify(rows, replacer));
+	}
+
+	/**
 	 * Escape a single cell value for CSV output.
 	 * Wraps in quotes and escapes inner quotes when the value contains
 	 * commas, quotes, or newlines.

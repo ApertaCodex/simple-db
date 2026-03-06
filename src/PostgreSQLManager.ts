@@ -88,7 +88,7 @@ export class PostgreSQLManager extends BaseDatabaseProvider {
 			}
 
 			const result = await client.query(query, params);
-			return result.rows;
+			return BaseDatabaseProvider.sanitizeRows(result.rows);
 		});
 	}
 
@@ -107,7 +107,7 @@ export class PostgreSQLManager extends BaseDatabaseProvider {
 	): Promise<any[]> {
 		return this.withClient(connectionString, async (client) => {
 			const result = await client.query(query);
-			return result.rows;
+			return BaseDatabaseProvider.sanitizeRows(result.rows);
 		});
 	}
 
