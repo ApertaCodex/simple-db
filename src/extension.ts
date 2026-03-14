@@ -10,6 +10,8 @@ let PostgreSQLManagerModule: typeof import('./PostgreSQLManager') | null = null;
 let MySQLManagerModule: typeof import('./MySQLManager') | null = null;
 let RedisManagerModule: typeof import('./RedisManager') | null = null;
 let LibSQLManagerModule: typeof import('./LibSQLManager') | null = null;
+let DuckDBManagerModule: typeof import('./DuckDBManager') | null = null;
+let CSVManagerModule: typeof import('./CSVManager') | null = null;
 let SQLiteEditorProviderModule: typeof import('./SQLiteEditorProvider') | null = null;
 
 // Provider registry — maps database type to its provider instance
@@ -54,6 +56,12 @@ async function getManagers() {
         if (!LibSQLManagerModule) {
             LibSQLManagerModule = await import('./LibSQLManager');
         }
+        if (!DuckDBManagerModule) {
+            DuckDBManagerModule = await import('./DuckDBManager');
+        }
+        if (!CSVManagerModule) {
+            CSVManagerModule = await import('./CSVManager');
+        }
 
         providerRegistry = new Map<DatabaseType, IDatabaseProvider>();
         providerRegistry.set('sqlite', new SQLiteManagerModule.SQLiteManager());
@@ -62,6 +70,8 @@ async function getManagers() {
         providerRegistry.set('mysql', new MySQLManagerModule.MySQLManager());
         providerRegistry.set('redis', new RedisManagerModule.RedisManager());
         providerRegistry.set('libsql', new LibSQLManagerModule.LibSQLManager());
+        providerRegistry.set('duckdb', new DuckDBManagerModule.DuckDBManager());
+        providerRegistry.set('csv', new CSVManagerModule.CSVManager());
     }
 
     if (!DatabaseExplorerModule) {
@@ -191,6 +201,24 @@ export function activate(context: vscode.ExtensionContext) {
                 outputChannel.appendLine(`[${new Date().toISOString()}] addLibSQL error: ${error}`);
             }
         }),
+        vscode.commands.registerCommand('simpleDB.addDuckDB', async () => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                await databaseExplorer.addDuckDB();
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error adding DuckDB database: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] addDuckDB error: ${error}`);
+            }
+        }),
+        vscode.commands.registerCommand('simpleDB.addCSV', async () => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                await databaseExplorer.addCSV();
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error adding CSV file: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] addCSV error: ${error}`);
+            }
+        }),
         vscode.commands.registerCommand('simpleDB.refresh', async () => {
             try {
                 const { databaseExplorer, treeDataProvider } = await getManagers();
@@ -265,6 +293,48 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('simpleDB.showLogs', () => {
             outputChannel.show();
+        }),
+        vscode.commands.registerCommand('simpleDB.openDuckDBFile', async (uri) => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                let fileUri: vscode.Uri | undefined;
+                if (Array.isArray(uri)) { fileUri = uri[0]; }
+                else if (uri) { fileUri = uri; }
+                if (!fileUri) {
+                    const selected = await vscode.window.showOpenDialog({
+                        canSelectFiles: true,
+                        filters: { 'DuckDB Database': ['duckdb', 'ddb'] }
+                    });
+                    if (selected && selected[0]) { fileUri = selected[0]; }
+                }
+                if (fileUri) {
+                    await databaseExplorer.openDuckDBFile(fileUri.fsPath);
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error opening DuckDB file: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] openDuckDBFile error: ${error}`);
+            }
+        }),
+        vscode.commands.registerCommand('simpleDB.openCSVFile', async (uri) => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                let fileUri: vscode.Uri | undefined;
+                if (Array.isArray(uri)) { fileUri = uri[0]; }
+                else if (uri) { fileUri = uri; }
+                if (!fileUri) {
+                    const selected = await vscode.window.showOpenDialog({
+                        canSelectFiles: true,
+                        filters: { 'CSV Files': ['csv'] }
+                    });
+                    if (selected && selected[0]) { fileUri = selected[0]; }
+                }
+                if (fileUri) {
+                    await databaseExplorer.openCSVFile(fileUri.fsPath);
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error opening CSV file: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] openCSVFile error: ${error}`);
+            }
         })
     ];
 

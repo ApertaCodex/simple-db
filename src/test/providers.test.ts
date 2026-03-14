@@ -47,6 +47,8 @@ import { PostgreSQLManager } from '../PostgreSQLManager';
 import { MySQLManager } from '../MySQLManager';
 import { RedisManager } from '../RedisManager';
 import { LibSQLManager } from '../LibSQLManager';
+import { DuckDBManager } from '../DuckDBManager';
+import { CSVManager } from '../CSVManager';
 
 // ---------------------------------------------------------------------------
 // Shared interface-conformance checks
@@ -489,4 +491,186 @@ describe('RedisManager', () => {
 			assert.equal(check[0].result, 'world');
 		});
 	}
+});
+
+// ---------------------------------------------------------------------------
+// DuckDB – full integration tests (file-based, always available)
+// ---------------------------------------------------------------------------
+
+describe('DuckDBManager', () => {
+	const provider = new DuckDBManager();
+	let dbPath: string;
+
+	before(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'simpledb-test-duckdb-'));
+		dbPath = tmpFile('test.duckdb');
+	});
+
+	after(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	interfaceConformance('DuckDBManager', provider, 'duckdb');
+
+	it('importFromJSON creates table and inserts rows', async () => {
+		const fixture = writeFixture('import-duckdb.json', JSON.stringify([
+			{ id: '1', name: 'Alice', age: '30' },
+			{ id: '2', name: 'Bob', age: '25' },
+			{ id: '3', name: 'Charlie', age: '35' },
+		]));
+
+		const count = await provider.importFromJSON(dbPath, 'users', fixture);
+		assert.equal(count, 3);
+	});
+
+	it('getTableNames lists the created table', async () => {
+		const tables = await provider.getTableNames(dbPath);
+		assert.ok(tables.includes('users'));
+	});
+
+	it('getRowCount returns correct count', async () => {
+		const count = await provider.getRowCount(dbPath, 'users');
+		assert.equal(count, 3);
+	});
+
+	it('getTableData returns all rows with no limit', async () => {
+		const data = await provider.getTableData(dbPath, 'users');
+		assert.equal(data.length, 3);
+		assert.ok(data.some((r: any) => r.name === 'Alice'));
+	});
+
+	it('getTableData respects limit and offset', async () => {
+		const page = await provider.getTableData(dbPath, 'users', 2, 1);
+		assert.equal(page.length, 2);
+	});
+
+	it('getTableData respects sortConfig', async () => {
+		const sorted = await provider.getTableData(dbPath, 'users', 10, 0, [
+			{ col: 'name', dir: 'desc' },
+		]);
+		assert.equal(sorted[0].name, 'Charlie');
+	});
+
+	it('executeQuery works with SQL', async () => {
+		const result = await provider.executeQuery(dbPath, "SELECT name FROM users WHERE id = '1'");
+		assert.equal(result.length, 1);
+		assert.equal(result[0].name, 'Alice');
+	});
+
+	it('getRecordIdentifier returns columns', async () => {
+		const row = { id: '1', name: 'Alice', age: '30' };
+		const identifier = await provider.getRecordIdentifier(dbPath, 'users', row);
+		assert.ok(Object.keys(identifier).length > 0);
+	});
+
+	it('exportToJSON writes a valid JSON file', async () => {
+		const outPath = tmpFile('export-duckdb.json');
+		const returned = await provider.exportToJSON(dbPath, 'users', outPath);
+		assert.equal(returned, outPath);
+
+		const content = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+		assert.ok(Array.isArray(content));
+		assert.equal(content.length, 3);
+	});
+
+	it('exportToCSV writes a valid CSV file', async () => {
+		const outPath = tmpFile('export-duckdb.csv');
+		const returned = await provider.exportToCSV(dbPath, 'users', outPath);
+		assert.equal(returned, outPath);
+
+		const lines = fs.readFileSync(outPath, 'utf8').split('\n').filter(Boolean);
+		assert.ok(lines.length >= 4); // header + 3 rows
+	});
+
+	it('importFromCSV creates table and inserts rows', async () => {
+		const csv = 'col_a,col_b\nfoo,bar\nbaz,qux\n';
+		const fixture = writeFixture('import-duckdb.csv', csv);
+		const count = await provider.importFromCSV(dbPath, 'csv_test', fixture);
+		assert.equal(count, 2);
+
+		const rows = await provider.getTableData(dbPath, 'csv_test');
+		assert.equal(rows.length, 2);
+		assert.equal(rows[0].col_a, 'foo');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// CSVManager – full integration tests (file-based, uses DuckDB in-memory)
+// ---------------------------------------------------------------------------
+
+describe('CSVManager', () => {
+	const provider = new CSVManager();
+	let csvPath: string;
+
+	before(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'simpledb-test-csv-'));
+		csvPath = tmpFile('data.csv');
+		fs.writeFileSync(csvPath, 'id,name,score\n1,Alice,95\n2,Bob,87\n3,Charlie,92\n', 'utf8');
+	});
+
+	after(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	interfaceConformance('CSVManager', provider, 'csv');
+
+	it('getTableNames returns filename without extension', async () => {
+		const tables = await provider.getTableNames(csvPath);
+		assert.equal(tables.length, 1);
+		assert.equal(tables[0], 'data');
+	});
+
+	it('getRowCount returns correct count', async () => {
+		const count = await provider.getRowCount(csvPath, 'data');
+		assert.equal(count, 3);
+	});
+
+	it('getTableData returns all rows', async () => {
+		const data = await provider.getTableData(csvPath, 'data');
+		assert.equal(data.length, 3);
+		assert.ok(data.some((r: any) => r.name === 'Alice'));
+	});
+
+	it('getTableData respects limit and offset', async () => {
+		const page = await provider.getTableData(csvPath, 'data', 2, 1);
+		assert.equal(page.length, 2);
+	});
+
+	it('getTableData respects sortConfig', async () => {
+		const sorted = await provider.getTableData(csvPath, 'data', 10, 0, [
+			{ col: 'name', dir: 'desc' },
+		]);
+		assert.equal(sorted[0].name, 'Charlie');
+	});
+
+	it('executeQuery works with SQL via DuckDB', async () => {
+		const result = await provider.executeQuery(csvPath, "SELECT name FROM data WHERE id = 1", { tableName: 'data' });
+		assert.equal(result.length, 1);
+		assert.equal(result[0].name, 'Alice');
+	});
+
+	it('getRecordIdentifier returns all columns', async () => {
+		const row = { id: 1, name: 'Alice', score: 95 };
+		const identifier = await provider.getRecordIdentifier(csvPath, 'data', row);
+		assert.ok(Object.keys(identifier).length === 3);
+	});
+
+	it('exportToJSON writes a valid JSON file', async () => {
+		const outPath = tmpFile('export-csv.json');
+		const returned = await provider.exportToJSON(csvPath, 'data', outPath);
+		assert.equal(returned, outPath);
+
+		const content = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+		assert.ok(Array.isArray(content));
+		assert.equal(content.length, 3);
+	});
+
+	it('exportToCSV writes a valid CSV file', async () => {
+		const outPath = tmpFile('export-csv.csv');
+		const returned = await provider.exportToCSV(csvPath, 'data', outPath);
+		assert.equal(returned, outPath);
+
+		const lines = fs.readFileSync(outPath, 'utf8').split('\n').filter(Boolean);
+		assert.ok(lines.length >= 4); // header + 3 rows
+	});
 });

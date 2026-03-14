@@ -1,8 +1,8 @@
 {
     "name": "simple-db",
     "displayName": "Simple DB",
-    "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, and LibSQL/Turso databases in VS Code",
-    "version": "3.0.4",
+    "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV files in VS Code",
+    "version": "4.0.0",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -26,6 +26,8 @@
         "redis",
         "libsql",
         "turso",
+        "duckdb",
+        "csv",
         "viewer",
         "data",
         "sql",
@@ -114,6 +116,22 @@
                 }
             },
             {
+                "command": "simpleDB.addDuckDB",
+                "title": "Add DuckDB Database",
+                "icon": {
+                    "light": "icons/duckdb.svg",
+                    "dark": "icons/duckdb.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addCSV",
+                "title": "Add CSV File",
+                "icon": {
+                    "light": "icons/csv.svg",
+                    "dark": "icons/csv.svg"
+                }
+            },
+            {
                 "command": "simpleDB.refresh",
                 "title": "Refresh",
                 "icon": "$(refresh)"
@@ -155,6 +173,16 @@
                 "command": "simpleDB.importFromCSV",
                 "title": "Import from CSV",
                 "icon": "$(file-add)"
+            },
+            {
+                "command": "simpleDB.openDuckDBFile",
+                "title": "Open DuckDB Database",
+                "icon": "$(database)"
+            },
+            {
+                "command": "simpleDB.openCSVFile",
+                "title": "Open CSV in Simple DB",
+                "icon": "$(table)"
             }
         ],
         "keybindings": [
@@ -229,6 +257,16 @@
                     "group": "navigation"
                 },
                 {
+                    "command": "simpleDB.addDuckDB",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addCSV",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
                     "command": "simpleDB.refresh",
                     "when": "view == databaseExplorer",
                     "group": "navigation"
@@ -270,6 +308,16 @@
                 {
                     "command": "simpleDB.openSQLiteFile",
                     "when": "resourceExtname == .db || resourceExtname == .sqlite || resourceExtname == .sqlite3 || resourceExtname == .db3",
+                    "group": "database"
+                },
+                {
+                    "command": "simpleDB.openDuckDBFile",
+                    "when": "resourceExtname == .duckdb || resourceExtname == .ddb",
+                    "group": "database"
+                },
+                {
+                    "command": "simpleDB.openCSVFile",
+                    "when": "resourceExtname == .csv",
                     "group": "database"
                 }
             ]
@@ -317,7 +365,9 @@
                                     "postgresql",
                                     "mysql",
                                     "redis",
-                                    "libsql"
+                                    "libsql",
+                                    "duckdb",
+                                    "csv"
                                 ],
                                 "description": "Database type"
                             },
@@ -372,6 +422,7 @@
         "ioredis": "^5.9.3",
         "mongoose": "^9.1.5",
         "mysql2": "^3.17.1",
-        "pg": "^8.18.0"
+        "pg": "^8.18.0",
+        "duckdb": "^1.3.0"
     }
 }

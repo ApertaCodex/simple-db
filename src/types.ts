@@ -13,7 +13,7 @@
 // ------------------------------------------------------------------
 // Database type union — extend this when adding new providers
 // ------------------------------------------------------------------
-export type DatabaseType = 'sqlite' | 'mongodb' | 'postgresql' | 'mysql' | 'redis' | 'libsql';
+export type DatabaseType = 'sqlite' | 'mongodb' | 'postgresql' | 'mysql' | 'redis' | 'libsql' | 'duckdb' | 'csv';
 
 // ------------------------------------------------------------------
 // Shared data structures

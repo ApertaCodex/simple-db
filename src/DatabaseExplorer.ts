@@ -47,6 +47,8 @@ class DatabaseTreeItem extends vscode.TreeItem {
                     'MySQL': { command: 'simpleDB.addMySQL', title: 'Add MySQL Connection', icon: 'mysql' },
                     'Redis': { command: 'simpleDB.addRedis', title: 'Add Redis Connection', icon: 'redis' },
                     'LibSQL': { command: 'simpleDB.addLibSQL', title: 'Add LibSQL/Turso Connection', icon: 'libsql' },
+                    'DuckDB': { command: 'simpleDB.addDuckDB', title: 'Add DuckDB Database', icon: 'duckdb' },
+                    'CSV': { command: 'simpleDB.addCSV', title: 'Add CSV File', icon: 'csv' },
                 };
                 let matched = false;
                 for (const [keyword, entry] of Object.entries(actionCommandMap)) {
@@ -404,6 +406,87 @@ export class DatabaseExplorer {
         }
     }
 
+    async addDuckDB() {
+        const uri = await vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            filters: { 'DuckDB Database': ['duckdb', 'ddb'] }
+        });
+
+        if (uri && uri[0]) {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Enter connection name',
+                value: path.basename(uri[0].fsPath, path.extname(uri[0].fsPath))
+            });
+
+            if (name) {
+                await this.addFileConnection(uri[0].fsPath, name, 'duckdb');
+            }
+        }
+    }
+
+    async addCSV() {
+        const uri = await vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            filters: { 'CSV Files': ['csv'] }
+        });
+
+        if (uri && uri[0]) {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Enter connection name',
+                value: path.basename(uri[0].fsPath, path.extname(uri[0].fsPath))
+            });
+
+            if (name) {
+                await this.addFileConnection(uri[0].fsPath, name, 'csv');
+            }
+        }
+    }
+
+    async openDuckDBFile(filePath: string) {
+        const existingConnection = this.connections.find(
+            conn => conn.type === 'duckdb' && conn.path === filePath
+        );
+        if (existingConnection) {
+            vscode.window.showInformationMessage(`DuckDB database "${existingConnection.name}" is already open`);
+            this._treeDataProvider.refresh();
+            return;
+        }
+        const name = path.basename(filePath, path.extname(filePath));
+        await this.addFileConnection(filePath, name, 'duckdb');
+    }
+
+    async openCSVFile(filePath: string) {
+        const existingConnection = this.connections.find(
+            conn => conn.type === 'csv' && conn.path === filePath
+        );
+        if (existingConnection) {
+            vscode.window.showInformationMessage(`CSV file "${existingConnection.name}" is already open`);
+            this._treeDataProvider.refresh();
+            return;
+        }
+        const name = path.basename(filePath, path.extname(filePath));
+        await this.addFileConnection(filePath, name, 'csv');
+    }
+
+    private async addFileConnection(filePath: string, name: string, type: DatabaseType) {
+        logger.info(`Adding ${type} connection: ${name} (${filePath})`);
+        const connection: DatabaseItem = {
+            name,
+            type,
+            path: filePath,
+            tables: [],
+            countsLoaded: false
+        };
+
+        const provider = this.getProvider(connection);
+        connection.tables = await provider.getTableNames(filePath);
+        this.connections.push(connection);
+        this.saveConnections();
+        this._treeDataProvider.refresh();
+        logger.info(`${type} "${name}" added successfully with ${connection.tables.length} tables`);
+        vscode.window.showInformationMessage(`${type === 'csv' ? 'CSV file' : 'DuckDB database'} "${name}" added successfully with ${connection.tables.length} tables`);
+    }
+
     async refreshTables(connection: DatabaseItem) {
         try {
             logger.info(`Refreshing tables for connection: ${connection.name}`);
@@ -463,6 +546,20 @@ export class DatabaseExplorer {
                 canSelectFiles: true,
                 defaultUri: vscode.Uri.file(connection.path),
                 filters: { 'SQLite Database': ['db', 'sqlite', 'sqlite3'] }
+            });
+            newPath = uri?.[0]?.fsPath;
+        } else if (connection.type === 'duckdb') {
+            const uri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                defaultUri: vscode.Uri.file(connection.path),
+                filters: { 'DuckDB Database': ['duckdb', 'ddb'] }
+            });
+            newPath = uri?.[0]?.fsPath;
+        } else if (connection.type === 'csv') {
+            const uri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                defaultUri: vscode.Uri.file(connection.path),
+                filters: { 'CSV Files': ['csv'] }
             });
             newPath = uri?.[0]?.fsPath;
         } else {
@@ -1058,6 +1155,8 @@ export class DatabaseExplorer {
         switch (dbType) {
             case 'sqlite':
             case 'libsql':
+            case 'duckdb':
+            case 'csv':
                 return `You are a SQL expert. The user is currently viewing the "${tableName}" table. Convert their natural language query to SQL for this specific table.
 
 ${tableSchema}${sampleData}
@@ -1065,7 +1164,7 @@ ${tableSchema}${sampleData}
 Rules:
 - ALWAYS use the table "${tableName}" - the user is looking at this table right now
 ${commonRules}
-- Use proper SQLite syntax
+- Use proper ${dbType === 'duckdb' || dbType === 'csv' ? 'DuckDB' : 'SQLite'} syntax
 - If the user asks to "show all", "get everything", use SELECT * FROM "${tableName}"
 - If the user mentions filtering, use WHERE clauses
 - If the user mentions sorting, use ORDER BY
@@ -1313,6 +1412,8 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
                     new DatabaseTreeItem(null, 'Add MySQL Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
                     new DatabaseTreeItem(null, 'Add Redis Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
                     new DatabaseTreeItem(null, 'Add LibSQL/Turso Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add DuckDB Database', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add CSV File', vscode.TreeItemCollapsibleState.None, 'actionButton'),
                 ];
             }
             
