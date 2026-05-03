@@ -5,3 +5,4 @@ out/
 .snapshots/
 package-lock.json
 .env
+.npmrc

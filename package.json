@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV files in VS Code",
-    "version": "4.0.6",
+    "version": "4.0.11",
     "publisher": "apertacodex",
     "icon": "icon.jpg",
     "categories": [
@@ -36,7 +36,7 @@
         "sort"
     ],
     "engines": {
-        "vscode": "^1.108.0"
+        "vscode": "^1.118.0"
     },
     "repository": {
         "type": "git",
@@ -400,29 +400,35 @@
         }
     },
     "scripts": {
-        "vscode:prepublish": "npm run compile",
+        "vscode:prepublish": "pnpm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
-        "test": "npm run compile && mkdir -p out/test && cp src/test/vscode-mock.js out/test/ && node --require ./out/test/vscode-mock.js --test out/test/providers.test.js",
-        "package": "vsce package",
-        "build": "npm run compile && rm -f simple-db-*.vsix && vsce package && npm run install-ext",
+        "test": "pnpm run compile && mkdir -p out/test && cp src/test/vscode-mock.js out/test/ && node --require ./out/test/vscode-mock.js --test out/test/providers.test.js",
+        "package": "pnpm dlx @vscode/vsce package",
+        "build": "pnpm run compile && rm -f simple-db-*.vsix && vsce package && pnpm run install-ext",
         "install-ext": "code --install-extension simple-db-*.vsix --force 2>/dev/null; code-insiders --install-extension simple-db-*.vsix --force 2>/dev/null; true",
+        "postinstall": "echo 'Skipping native builds during install. Run: pnpm rebuild @vscode/sqlite3 duckdb to build natives.'",
         "version": "4.0.6"
     },
+    "pnpm": {
+        "onlyBuiltDependencies": [
+            "@vscode/sqlite3",
+            "@vscode/vsce-sign"
+        ]
+    },
     "devDependencies": {
-        "@types/node": "^25.0.9",
-        "@types/pg": "^8.16.0",
-        "@types/vscode": "^1.108.1",
-        "ovsx": "^0.10.8",
-        "typescript": "^5.9.3"
+        "@types/node": "^25.6.0",
+        "@types/pg": "^8.20.0",
+        "@types/vscode": "^1.118.0",
+        "typescript": "^6.0.3"
     },
     "dependencies": {
-        "@libsql/client": "^0.17.0",
-        "@vscode/sqlite3": "^5.1.8-vscode",
-        "ioredis": "^5.9.3",
-        "mongoose": "^9.1.5",
-        "mysql2": "^3.17.1",
-        "pg": "^8.18.0",
-        "duckdb": "^1.3.0"
+        "@libsql/client": "^0.17.3",
+        "@vscode/sqlite3": "^5.1.12-vscode",
+        "ioredis": "^5.10.1",
+        "mongoose": "^9.6.1",
+        "mysql2": "^3.22.3",
+        "pg": "^8.20.0",
+        "duckdb": "^1.4.4"
     }
 }

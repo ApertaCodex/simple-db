@@ -24,6 +24,35 @@ vsc-extension-quickstart.md
 **/.env.development.local
 **/.env.test.local
 **/.env.production.local
-# node_modules/** - commented out to include dependencies (sqlite3, mongoose)
+node_modules/.pnpm/**
+node_modules/.modules.yaml
+pnpm-lock.yaml
+pnpm-workspace.yaml
 Makefile
 .env
+
+# Exclude dev-only sub-dependencies that bloat the package
+**/.clang-format
+**/.editorconfig
+**/.eslintrc*
+**/.prettierrc*
+**/CHANGELOG.md
+**/LICENSE.md
+**/README.md
+**/readme.*
+**/readme.*
+**/.github/**
+**/.cache/**
+**/.circleci/**
+**/coverage/**
+**/docs/**
+**/example/**
+**/examples/**
+**/test/**
+**/tests/**
+**/__tests__/**
+**/*.d.ts
+**/*.spec.js
+**/*.test.js
+**/*.spec.ts
+**/*.test.ts
