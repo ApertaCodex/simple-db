@@ -1068,86 +1068,27 @@ export class DatabaseExplorer {
 
     async generateAIQueryForTable(connection: DatabaseItem, tableName: string, prompt: string): Promise<string> {
         try {
-            // Get OpenAI API key from environment or settings
-            let apiKey = process.env.OPENAI_API_KEY;
-            
-            if (!apiKey) {
-                // Try to get from VSCode settings
-                const config = vscode.workspace.getConfiguration('simpleDB');
-                apiKey = config.get<string>('openaiApiKey');
-                
-                if (!apiKey) {
-                    // Ask user to provide API key
-                    const result = await vscode.window.showInputBox({
-                        prompt: 'Enter your OpenAI API key (will be saved in settings)',
-                        password: true,
-                        validateInput: (value) => {
-                            if (!value || value.trim().length === 0) {
-                                return 'API key is required';
-                            }
-                            if (!value.startsWith('sk-')) {
-                                return 'Invalid OpenAI API key format';
-                            }
-                            return null;
-                        }
-                    });
-                    
-                    if (result) {
-                        apiKey = result;
-                        // Save to settings
-                        await config.update('openaiApiKey', apiKey, vscode.ConfigurationTarget.Global);
-                    } else {
-                        throw new Error('OpenAI API key is required for AI query generation');
-                    }
-                }
-            }
+            const config = vscode.workspace.getConfiguration('simpleDB');
+            const aiProvider = config.get<string>('aiProvider') || 'openai';
 
             // Get table schema and sample data for context — works for all providers
             let tableSchema = '';
             let sampleData = '';
-            const aiProvider = this.getProvider(connection);
-            const tableData = await aiProvider.getTableData(connection.path, tableName, 3, 0);
+            const dbProvider = this.getProvider(connection);
+            const tableData = await dbProvider.getTableData(connection.path, tableName, 3, 0);
             if (tableData.length > 0) {
                 const columns = Object.keys(tableData[0]);
                 tableSchema = `Table/Collection: ${tableName}\nColumns/Fields: ${columns.join(', ')}`;
                 sampleData = `\nSample data (first ${tableData.length} rows/documents):\n${JSON.stringify(BaseDatabaseProvider.sanitizeRows(tableData), null, 2)}`;
             }
 
-            // Build per-engine system prompt
             const systemPrompt = this.buildAISystemPrompt(connection.type, tableName, tableSchema, sampleData);
+            let query: string;
 
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                },
-                body: JSON.stringify({
-                    model: 'gpt-3.5-turbo',
-                    messages: [
-                        {
-                            role: 'system',
-                            content: systemPrompt
-                        },
-                        {
-                            role: 'user',
-                            content: prompt
-                        }
-                    ],
-                    max_tokens: 500,
-                    temperature: 0.1
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json() as any;
-            let query = data.choices?.[0]?.message?.content?.trim();
-            
-            if (!query) {
-                throw new Error('No query generated');
+            if (aiProvider === 'ollama') {
+                query = await this.queryOllama(config, systemPrompt, prompt);
+            } else {
+                query = await this.queryOpenAI(config, systemPrompt, prompt);
             }
 
             // Clean up any markdown formatting that might have slipped through
@@ -1157,6 +1098,96 @@ export class DatabaseExplorer {
         } catch (error) {
             throw new Error(`AI query generation failed: ${error}`);
         }
+    }
+
+    private async queryOpenAI(config: vscode.WorkspaceConfiguration, systemPrompt: string, userPrompt: string): Promise<string> {
+        let apiKey = process.env.OPENAI_API_KEY;
+
+        if (!apiKey) {
+            apiKey = config.get<string>('openaiApiKey');
+
+            if (!apiKey) {
+                const result = await vscode.window.showInputBox({
+                    prompt: 'Enter your OpenAI API key (will be saved in settings)',
+                    password: true,
+                    validateInput: (value) => {
+                        if (!value || value.trim().length === 0) {
+                            return 'API key is required';
+                        }
+                        return null;
+                    }
+                });
+
+                if (result) {
+                    apiKey = result;
+                    await config.update('openaiApiKey', apiKey, vscode.ConfigurationTarget.Global);
+                } else {
+                    throw new Error('OpenAI API key is required for AI query generation');
+                }
+            }
+        }
+
+        const model = config.get<string>('openaiModel') || 'gpt-4o-mini';
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                max_tokens: 500,
+                temperature: 0.1
+            })
+        });
+
+        if (!response.ok) {
+            const body = await response.text().catch(() => '');
+            throw new Error(`OpenAI API error: ${response.status} ${response.statusText}${body ? ` - ${body}` : ''}`);
+        }
+
+        const data = await response.json() as any;
+        const content = data.choices?.[0]?.message?.content?.trim();
+        if (!content) {
+            throw new Error('No query generated by OpenAI');
+        }
+        return content;
+    }
+
+    private async queryOllama(config: vscode.WorkspaceConfiguration, systemPrompt: string, userPrompt: string): Promise<string> {
+        const baseUrl = config.get<string>('ollamaUrl') || 'http://localhost:11434';
+        const model = config.get<string>('ollamaModel') || 'llama3.2';
+
+        const response = await fetch(`${baseUrl}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                stream: false,
+                options: { temperature: 0.1 }
+            })
+        });
+
+        if (!response.ok) {
+            const body = await response.text().catch(() => '');
+            throw new Error(`Ollama error: ${response.status} ${response.statusText}${body ? ` - ${body}` : ''}`);
+        }
+
+        const data = await response.json() as any;
+        const content = data.message?.content?.trim();
+        if (!content) {
+            throw new Error('No query generated by Ollama');
+        }
+        return content;
     }
 
     /**

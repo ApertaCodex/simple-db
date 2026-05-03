@@ -1,434 +1,462 @@
 {
-  "name": "simple-db",
-  "displayName": "Simple DB",
-  "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV files in VS Code",
-  "version": "4.1.0",
-  "publisher": "apertacodex",
-  "icon": "images/icon.png",
-  "categories": [
-    "Data Science",
-    "Visualization",
-    "Other"
-  ],
-  "keywords": [
-    "simpledb",
-    "simple-db",
-    "sqlite",
-    "sqlite3",
-    "sqlite-simple",
-    "simple-sqlite",
-    "database",
-    "mongodb",
-    "postgresql",
-    "postgres",
-    "mysql",
-    "mariadb",
-    "redis",
-    "libsql",
-    "turso",
-    "duckdb",
-    "csv",
-    "viewer",
-    "data",
-    "sql",
-    "nosql",
-    "filter",
-    "sort"
-  ],
-  "engines": {
-    "vscode": "^1.118.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/apertacodex/simple-db"
-  },
-  "activationEvents": [
-    "onStartupFinished"
-  ],
-  "main": "./out/extension.js",
-  "contributes": {
-    "views": {
-      "simple-db": [
-        {
-          "id": "databaseExplorer",
-          "name": "Database Explorer",
-          "when": "true",
-          "icon": "$(database)"
-        }
-      ]
+    "name": "simple-db",
+    "displayName": "Simple DB",
+    "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV files in VS Code",
+    "version": "4.1.1",
+    "publisher": "apertacodex",
+    "icon": "images/icon.png",
+    "categories": [
+        "Data Science",
+        "Visualization",
+        "Other"
+    ],
+    "keywords": [
+        "simpledb",
+        "simple-db",
+        "sqlite",
+        "sqlite3",
+        "sqlite-simple",
+        "simple-sqlite",
+        "database",
+        "mongodb",
+        "postgresql",
+        "postgres",
+        "mysql",
+        "mariadb",
+        "redis",
+        "libsql",
+        "turso",
+        "duckdb",
+        "csv",
+        "viewer",
+        "data",
+        "sql",
+        "nosql",
+        "filter",
+        "sort"
+    ],
+    "engines": {
+        "vscode": "^1.118.0"
     },
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "simple-db",
-          "title": "Simple DB",
-          "icon": "menu.svg"
-        }
-      ]
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/apertacodex/simple-db"
     },
-    "commands": [
-      {
-        "command": "simpleDB.addSQLite",
-        "title": "Add SQLite Database",
-        "icon": {
-          "light": "icons/sqlite.svg",
-          "dark": "icons/sqlite.svg"
-        }
-      },
-      {
-        "command": "simpleDB.addMongoDB",
-        "title": "Add MongoDB Connection",
-        "icon": {
-          "light": "icons/mongodb.svg",
-          "dark": "icons/mongodb.svg"
-        }
-      },
-      {
-        "command": "simpleDB.addPostgreSQL",
-        "title": "Add PostgreSQL Connection",
-        "icon": {
-          "light": "icons/postgresql.svg",
-          "dark": "icons/postgresql.svg"
-        }
-      },
-      {
-        "command": "simpleDB.addMySQL",
-        "title": "Add MySQL Connection",
-        "icon": {
-          "light": "icons/mysql.svg",
-          "dark": "icons/mysql.svg"
-        }
-      },
-      {
-        "command": "simpleDB.addRedis",
-        "title": "Add Redis Connection",
-        "icon": {
-          "light": "icons/redis.svg",
-          "dark": "icons/redis.svg"
-        }
-      },
-      {
-        "command": "simpleDB.addLibSQL",
-        "title": "Add LibSQL/Turso Connection",
-        "icon": {
-          "light": "icons/libsql.svg",
-          "dark": "icons/libsql.svg"
-        }
-      },
-      {
-        "command": "simpleDB.addDuckDB",
-        "title": "Add DuckDB Database",
-        "icon": {
-          "light": "icons/duckdb.svg",
-          "dark": "icons/duckdb.svg"
-        }
-      },
-      {
-        "command": "simpleDB.addCSV",
-        "title": "Add CSV File",
-        "icon": {
-          "light": "icons/csv.svg",
-          "dark": "icons/csv.svg"
-        }
-      },
-      {
-        "command": "simpleDB.refresh",
-        "title": "Refresh",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "simpleDB.editConnection",
-        "title": "Edit Connection",
-        "icon": "$(edit)"
-      },
-      {
-        "command": "simpleDB.removeConnection",
-        "title": "Remove Connection"
-      },
-      {
-        "command": "simpleDB.viewData",
-        "title": "View Data"
-      },
-      {
-        "command": "simpleDB.openSQLiteFile",
-        "title": "Open SQLite Database",
-        "icon": "$(database)"
-      },
-      {
-        "command": "simpleDB.exportToJSON",
-        "title": "Export to JSON",
-        "icon": "$(json)"
-      },
-      {
-        "command": "simpleDB.exportToCSV",
-        "title": "Export to CSV",
-        "icon": "$(table)"
-      },
-      {
-        "command": "simpleDB.importFromJSON",
-        "title": "Import from JSON",
-        "icon": "$(file-add)"
-      },
-      {
-        "command": "simpleDB.importFromCSV",
-        "title": "Import from CSV",
-        "icon": "$(file-add)"
-      },
-      {
-        "command": "simpleDB.openDuckDBFile",
-        "title": "Open DuckDB Database",
-        "icon": "$(database)"
-      },
-      {
-        "command": "simpleDB.openCSVFile",
-        "title": "Open CSV in Simple DB",
-        "icon": "$(table)"
-      }
+    "activationEvents": [
+        "onStartupFinished"
     ],
-    "keybindings": [
-      {
-        "command": "simpleDB.addSQLite",
-        "key": "ctrl+shift+d",
-        "mac": "cmd+shift+d",
-        "when": "view == databaseExplorer"
-      },
-      {
-        "command": "simpleDB.addMongoDB",
-        "key": "ctrl+shift+m",
-        "mac": "cmd+shift+m",
-        "when": "view == databaseExplorer"
-      },
-      {
-        "command": "simpleDB.refresh",
-        "key": "ctrl+shift+r",
-        "mac": "cmd+shift+r",
-        "when": "view == databaseExplorer"
-      },
-      {
-        "command": "simpleDB.openSQLiteFile",
-        "key": "ctrl+shift+o",
-        "mac": "cmd+shift+o"
-      }
-    ],
-    "fileAssociations": [
-      {
-        "pattern": "**/*.db",
-        "scheme": "file"
-      },
-      {
-        "pattern": "**/*.sqlite",
-        "scheme": "file"
-      },
-      {
-        "pattern": "**/*.sqlite3",
-        "scheme": "file"
-      }
-    ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "simpleDB.addSQLite",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
+    "main": "./out/extension.js",
+    "contributes": {
+        "views": {
+            "simple-db": [
+                {
+                    "id": "databaseExplorer",
+                    "name": "Database Explorer",
+                    "when": "true",
+                    "icon": "$(database)"
+                }
+            ]
         },
-        {
-          "command": "simpleDB.addMongoDB",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "simple-db",
+                    "title": "Simple DB",
+                    "icon": "menu.svg"
+                }
+            ]
         },
-        {
-          "command": "simpleDB.addPostgreSQL",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "simpleDB.addMySQL",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "simpleDB.addRedis",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "simpleDB.addLibSQL",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "simpleDB.addDuckDB",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "simpleDB.addCSV",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "simpleDB.refresh",
-          "when": "view == databaseExplorer",
-          "group": "navigation"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "simpleDB.editConnection",
-          "when": "view == databaseExplorer && viewItem == connection",
-          "group": "inline"
-        },
-        {
-          "command": "simpleDB.removeConnection",
-          "when": "view == databaseExplorer && viewItem == connection",
-          "group": "inline"
-        },
-        {
-          "command": "simpleDB.importFromJSON",
-          "when": "view == databaseExplorer && viewItem == connection",
-          "group": "import"
-        },
-        {
-          "command": "simpleDB.importFromCSV",
-          "when": "view == databaseExplorer && viewItem == connection",
-          "group": "import"
-        },
-        {
-          "command": "simpleDB.exportToJSON",
-          "when": "view == databaseExplorer && viewItem == table",
-          "group": "inline"
-        },
-        {
-          "command": "simpleDB.exportToCSV",
-          "when": "view == databaseExplorer && viewItem == table",
-          "group": "inline"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "simpleDB.openSQLiteFile",
-          "when": "resourceExtname == .db || resourceExtname == .sqlite || resourceExtname == .sqlite3 || resourceExtname == .db3",
-          "group": "database"
-        },
-        {
-          "command": "simpleDB.openDuckDBFile",
-          "when": "resourceExtname == .duckdb || resourceExtname == .ddb",
-          "group": "database"
-        },
-        {
-          "command": "simpleDB.openCSVFile",
-          "when": "resourceExtname == .csv",
-          "group": "database"
-        }
-      ]
-    },
-    "customEditors": [
-      {
-        "viewType": "simpleDB.sqliteEditor",
-        "displayName": "SQLite Database",
-        "selector": [
-          {
-            "filenamePattern": "*.db"
-          },
-          {
-            "filenamePattern": "*.sqlite"
-          },
-          {
-            "filenamePattern": "*.sqlite3"
-          },
-          {
-            "filenamePattern": "*.db3"
-          }
-        ],
-        "priority": "option"
-      }
-    ],
-    "configuration": {
-      "title": "Simple DB",
-      "properties": {
-        "simpleDB.connections": {
-          "type": "array",
-          "default": [],
-          "description": "Database connections configuration",
-          "items": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string",
-                "description": "Connection name"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "sqlite",
-                  "mongodb",
-                  "postgresql",
-                  "mysql",
-                  "redis",
-                  "libsql",
-                  "duckdb",
-                  "csv"
-                ],
-                "description": "Database type"
-              },
-              "path": {
-                "type": "string",
-                "description": "Database file path (SQLite) or connection string (MongoDB)"
-              }
+        "commands": [
+            {
+                "command": "simpleDB.addSQLite",
+                "title": "Add SQLite Database",
+                "icon": {
+                    "light": "icons/sqlite.svg",
+                    "dark": "icons/sqlite.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addMongoDB",
+                "title": "Add MongoDB Connection",
+                "icon": {
+                    "light": "icons/mongodb.svg",
+                    "dark": "icons/mongodb.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addPostgreSQL",
+                "title": "Add PostgreSQL Connection",
+                "icon": {
+                    "light": "icons/postgresql.svg",
+                    "dark": "icons/postgresql.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addMySQL",
+                "title": "Add MySQL Connection",
+                "icon": {
+                    "light": "icons/mysql.svg",
+                    "dark": "icons/mysql.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addRedis",
+                "title": "Add Redis Connection",
+                "icon": {
+                    "light": "icons/redis.svg",
+                    "dark": "icons/redis.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addLibSQL",
+                "title": "Add LibSQL/Turso Connection",
+                "icon": {
+                    "light": "icons/libsql.svg",
+                    "dark": "icons/libsql.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addDuckDB",
+                "title": "Add DuckDB Database",
+                "icon": {
+                    "light": "icons/duckdb.svg",
+                    "dark": "icons/duckdb.svg"
+                }
+            },
+            {
+                "command": "simpleDB.addCSV",
+                "title": "Add CSV File",
+                "icon": {
+                    "light": "icons/csv.svg",
+                    "dark": "icons/csv.svg"
+                }
+            },
+            {
+                "command": "simpleDB.refresh",
+                "title": "Refresh",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "simpleDB.editConnection",
+                "title": "Edit Connection",
+                "icon": "$(edit)"
+            },
+            {
+                "command": "simpleDB.removeConnection",
+                "title": "Remove Connection"
+            },
+            {
+                "command": "simpleDB.viewData",
+                "title": "View Data"
+            },
+            {
+                "command": "simpleDB.openSQLiteFile",
+                "title": "Open SQLite Database",
+                "icon": "$(database)"
+            },
+            {
+                "command": "simpleDB.exportToJSON",
+                "title": "Export to JSON",
+                "icon": "$(json)"
+            },
+            {
+                "command": "simpleDB.exportToCSV",
+                "title": "Export to CSV",
+                "icon": "$(table)"
+            },
+            {
+                "command": "simpleDB.importFromJSON",
+                "title": "Import from JSON",
+                "icon": "$(file-add)"
+            },
+            {
+                "command": "simpleDB.importFromCSV",
+                "title": "Import from CSV",
+                "icon": "$(file-add)"
+            },
+            {
+                "command": "simpleDB.openDuckDBFile",
+                "title": "Open DuckDB Database",
+                "icon": "$(database)"
+            },
+            {
+                "command": "simpleDB.openCSVFile",
+                "title": "Open CSV in Simple DB",
+                "icon": "$(table)"
             }
-          }
+        ],
+        "keybindings": [
+            {
+                "command": "simpleDB.addSQLite",
+                "key": "ctrl+shift+d",
+                "mac": "cmd+shift+d",
+                "when": "view == databaseExplorer"
+            },
+            {
+                "command": "simpleDB.addMongoDB",
+                "key": "ctrl+shift+m",
+                "mac": "cmd+shift+m",
+                "when": "view == databaseExplorer"
+            },
+            {
+                "command": "simpleDB.refresh",
+                "key": "ctrl+shift+r",
+                "mac": "cmd+shift+r",
+                "when": "view == databaseExplorer"
+            },
+            {
+                "command": "simpleDB.openSQLiteFile",
+                "key": "ctrl+shift+o",
+                "mac": "cmd+shift+o"
+            }
+        ],
+        "fileAssociations": [
+            {
+                "pattern": "**/*.db",
+                "scheme": "file"
+            },
+            {
+                "pattern": "**/*.sqlite",
+                "scheme": "file"
+            },
+            {
+                "pattern": "**/*.sqlite3",
+                "scheme": "file"
+            }
+        ],
+        "menus": {
+            "view/title": [
+                {
+                    "command": "simpleDB.addSQLite",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addMongoDB",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addPostgreSQL",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addMySQL",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addRedis",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addLibSQL",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addDuckDB",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.addCSV",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
+                    "command": "simpleDB.refresh",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "simpleDB.editConnection",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "inline"
+                },
+                {
+                    "command": "simpleDB.removeConnection",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "inline"
+                },
+                {
+                    "command": "simpleDB.importFromJSON",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "import"
+                },
+                {
+                    "command": "simpleDB.importFromCSV",
+                    "when": "view == databaseExplorer && viewItem == connection",
+                    "group": "import"
+                },
+                {
+                    "command": "simpleDB.exportToJSON",
+                    "when": "view == databaseExplorer && viewItem == table",
+                    "group": "inline"
+                },
+                {
+                    "command": "simpleDB.exportToCSV",
+                    "when": "view == databaseExplorer && viewItem == table",
+                    "group": "inline"
+                }
+            ],
+            "explorer/context": [
+                {
+                    "command": "simpleDB.openSQLiteFile",
+                    "when": "resourceExtname == .db || resourceExtname == .sqlite || resourceExtname == .sqlite3 || resourceExtname == .db3",
+                    "group": "database"
+                },
+                {
+                    "command": "simpleDB.openDuckDBFile",
+                    "when": "resourceExtname == .duckdb || resourceExtname == .ddb",
+                    "group": "database"
+                },
+                {
+                    "command": "simpleDB.openCSVFile",
+                    "when": "resourceExtname == .csv",
+                    "group": "database"
+                }
+            ]
         },
-        "simpleDB.autoOpenSQLiteFiles": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically open SQLite database files when they are opened in the editor"
+        "customEditors": [
+            {
+                "viewType": "simpleDB.sqliteEditor",
+                "displayName": "SQLite Database",
+                "selector": [
+                    {
+                        "filenamePattern": "*.db"
+                    },
+                    {
+                        "filenamePattern": "*.sqlite"
+                    },
+                    {
+                        "filenamePattern": "*.sqlite3"
+                    },
+                    {
+                        "filenamePattern": "*.db3"
+                    }
+                ],
+                "priority": "option"
+            }
+        ],
+        "configuration": {
+            "title": "Simple DB",
+            "properties": {
+                "simpleDB.connections": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Database connections configuration",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Connection name"
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "sqlite",
+                                    "mongodb",
+                                    "postgresql",
+                                    "mysql",
+                                    "redis",
+                                    "libsql",
+                                    "duckdb",
+                                    "csv"
+                                ],
+                                "description": "Database type"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Database file path (SQLite) or connection string (MongoDB)"
+                            }
+                        }
+                    }
+                },
+                "simpleDB.autoOpenSQLiteFiles": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically open SQLite database files when they are opened in the editor"
+                },
+                "simpleDB.aiProvider": {
+                    "type": "string",
+                    "default": "openai",
+                    "enum": [
+                        "openai",
+                        "ollama"
+                    ],
+                    "enumDescriptions": [
+                        "Use OpenAI API (requires API key)",
+                        "Use local Ollama instance (no API key needed)"
+                    ],
+                    "description": "AI provider for query generation"
+                },
+                "simpleDB.openaiApiKey": {
+                    "type": "string",
+                    "default": "",
+                    "description": "OpenAI API key for AI query generation (can also be set via OPENAI_API_KEY environment variable)"
+                },
+                "simpleDB.openaiModel": {
+                    "type": "string",
+                    "default": "gpt-4o-mini",
+                    "description": "OpenAI model to use for AI query generation"
+                },
+                "simpleDB.ollamaUrl": {
+                    "type": "string",
+                    "default": "http://localhost:11434",
+                    "description": "Ollama server URL"
+                },
+                "simpleDB.ollamaModel": {
+                    "type": "string",
+                    "default": "llama3.2",
+                    "description": "Ollama model to use for AI query generation (e.g., llama3.2, codellama, mistral, qwen2.5-coder)"
+                }
+            }
         },
-        "simpleDB.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "OpenAI API key for AI query generation (can also be set via OPENAI_API_KEY environment variable)"
+        "configurationDefaults": {
+            "workbench.editorAssociations": {
+                "*.db": "simpleDB.sqliteEditor",
+                "*.sqlite": "simpleDB.sqliteEditor",
+                "*.sqlite3": "simpleDB.sqliteEditor",
+                "*.db3": "simpleDB.sqliteEditor"
+            }
         }
-      }
     },
-    "configurationDefaults": {
-      "workbench.editorAssociations": {
-        "*.db": "simpleDB.sqliteEditor",
-        "*.sqlite": "simpleDB.sqliteEditor",
-        "*.sqlite3": "simpleDB.sqliteEditor",
-        "*.db3": "simpleDB.sqliteEditor"
-      }
+    "scripts": {
+        "vscode:prepublish": "pnpm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "test": "pnpm run compile && mkdir -p out/test && cp src/test/vscode-mock.js out/test/ && node --require ./out/test/vscode-mock.js --test out/test/providers.test.js",
+        "package": "pnpm dlx @vscode/vsce package",
+        "build": "pnpm run compile && rm -f simple-db-*.vsix && vsce package && pnpm run install-ext",
+        "install-ext": "code --install-extension simple-db-*.vsix --force 2>/dev/null; code-insiders --install-extension simple-db-*.vsix --force 2>/dev/null; true",
+        "postinstall": "echo 'Skipping native builds during install. Run: pnpm rebuild @vscode/sqlite3 duckdb to build natives.'",
+        "version": "4.0.7"
+    },
+    "pnpm": {
+        "onlyBuiltDependencies": [
+            "@vscode/sqlite3",
+            "@vscode/vsce-sign"
+        ]
+    },
+    "devDependencies": {
+        "@types/node": "^25.6.0",
+        "@types/pg": "^8.20.0",
+        "@types/vscode": "^1.118.0",
+        "typescript": "^6.0.3"
+    },
+    "dependencies": {
+        "@libsql/client": "^0.17.3",
+        "@vscode/sqlite3": "^5.1.12-vscode",
+        "ioredis": "^5.10.1",
+        "mongoose": "^9.6.1",
+        "mysql2": "^3.22.3",
+        "pg": "^8.20.0",
+        "duckdb": "^1.4.4"
     }
-  },
-  "scripts": {
-    "vscode:prepublish": "pnpm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "test": "pnpm run compile && mkdir -p out/test && cp src/test/vscode-mock.js out/test/ && node --require ./out/test/vscode-mock.js --test out/test/providers.test.js",
-    "package": "pnpm dlx @vscode/vsce package",
-    "build": "pnpm run compile && rm -f simple-db-*.vsix && vsce package && pnpm run install-ext",
-    "install-ext": "code --install-extension simple-db-*.vsix --force 2>/dev/null; code-insiders --install-extension simple-db-*.vsix --force 2>/dev/null; true",
-    "postinstall": "echo 'Skipping native builds during install. Run: pnpm rebuild @vscode/sqlite3 duckdb to build natives.'",
-    "version": "4.0.7"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@vscode/sqlite3",
-      "@vscode/vsce-sign"
-    ]
-  },
-  "devDependencies": {
-    "@types/node": "^25.6.0",
-    "@types/pg": "^8.20.0",
-    "@types/vscode": "^1.118.0",
-    "typescript": "^6.0.3"
-  },
-  "dependencies": {
-    "@libsql/client": "^0.17.3",
-    "@vscode/sqlite3": "^5.1.12-vscode",
-    "ioredis": "^5.10.1",
-    "mongoose": "^9.6.1",
-    "mysql2": "^3.22.3",
-    "pg": "^8.20.0",
-    "duckdb": "^1.4.4"
-  }
 }
