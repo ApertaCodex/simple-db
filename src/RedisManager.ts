@@ -28,6 +28,11 @@ async function getIoredis() {
  *
  * Connection string format: redis://[:password@]host:port[/db]
  */
+/** Maximum length for a single Redis value before truncation. */
+const MAX_VALUE_LENGTH = 100_000;
+/** Suffix appended when a value is truncated. */
+const TRUNCATION_SUFFIX = '... [truncated]';
+
 export class RedisManager extends BaseDatabaseProvider {
 
 	getType(): DatabaseType {
@@ -42,6 +47,17 @@ export class RedisManager extends BaseDatabaseProvider {
 		} finally {
 			redis.disconnect();
 		}
+	}
+
+	/**
+	 * Truncate a string value to MAX_VALUE_LENGTH, appending a suffix
+	 * when truncation occurs. Prevents RangeError on enormous values.
+	 */
+	private truncateValue(value: string): string {
+		if (value.length <= MAX_VALUE_LENGTH) {
+			return value;
+		}
+		return value.substring(0, MAX_VALUE_LENGTH) + TRUNCATION_SUFFIX;
 	}
 
 	/**
@@ -72,6 +88,10 @@ export class RedisManager extends BaseDatabaseProvider {
 	/**
 	 * Returns key-value pairs for a given prefix pattern.
 	 * Each row is { key, type, value, ttl }.
+	 *
+	 * Uses Redis pipelining to batch commands per key, reducing round-trips
+	 * from O(2N) (type + value per key) to O(1) per pipeline batch.
+	 * Values are truncated to MAX_VALUE_LENGTH to prevent RangeError.
 	 */
 	async getTableData(
 		connectionString: string,
@@ -90,7 +110,6 @@ export class RedisManager extends BaseDatabaseProvider {
 				cursor = nextCursor;
 
 				if (tableName === '__no_prefix__') {
-					// Only keep keys without a colon prefix
 					for (const key of keys) {
 						if (!key.includes(':')) {
 							allKeys.push(key);
@@ -112,27 +131,66 @@ export class RedisManager extends BaseDatabaseProvider {
 
 			const pageKeys = allKeys.slice(normalizedOffset, normalizedOffset + normalizedLimit);
 
-			const rows: any[] = [];
+			if (pageKeys.length === 0) {
+				return [];
+			}
+
+			// Batch 1: pipeline TYPE + TTL for all keys (2 commands per key)
+			const typeTtlPipeline = redis.pipeline();
 			for (const key of pageKeys) {
-				const keyType = await redis.type(key);
+				typeTtlPipeline.type(key);
+				typeTtlPipeline.ttl(key);
+			}
+			const typeTtlResults = await typeTtlPipeline.exec();
+
+			// Batch 2: pipeline value-fetch commands per key type
+			const valuePipeline = redis.pipeline();
+			for (let i = 0; i < pageKeys.length; i++) {
+				const keyType = typeTtlResults![i * 2][1] as string;
+				switch (keyType) {
+					case 'string':
+						valuePipeline.get(pageKeys[i]);
+						break;
+					case 'list':
+						valuePipeline.lrange(pageKeys[i], 0, -1);
+						break;
+					case 'set':
+						valuePipeline.smembers(pageKeys[i]);
+						break;
+					case 'zset':
+						valuePipeline.zrange(pageKeys[i], 0, -1, 'WITHSCORES');
+						break;
+					case 'hash':
+						valuePipeline.hgetall(pageKeys[i]);
+						break;
+					// stream and unknown types need no extra fetch
+				}
+			}
+			const valueResults = valuePipeline.exec ? await valuePipeline.exec() : null;
+
+			// Assemble rows
+			const rows: any[] = [];
+			let valueIdx = 0;
+			for (let i = 0; i < pageKeys.length; i++) {
+				const key = pageKeys[i];
+				const keyType = typeTtlResults![i * 2][1] as string;
+				const ttl = typeTtlResults![i * 2 + 1][1] as number;
 				let value: any;
 
 				switch (keyType) {
-					case 'string':
-						value = await redis.get(key);
+					case 'string': {
+						const raw = valueResults![valueIdx++][1] as string | null;
+						value = this.truncateValue(raw ?? '(nil)');
 						break;
+					}
 					case 'list':
-						value = JSON.stringify(await redis.lrange(key, 0, -1));
-						break;
 					case 'set':
-						value = JSON.stringify(await redis.smembers(key));
-						break;
 					case 'zset':
-						value = JSON.stringify(await redis.zrange(key, 0, -1, 'WITHSCORES'));
+					case 'hash': {
+						const raw = valueResults![valueIdx++][1];
+						value = this.truncateValue(JSON.stringify(raw));
 						break;
-					case 'hash':
-						value = JSON.stringify(await redis.hgetall(key));
-						break;
+					}
 					case 'stream':
 						value = '[stream]';
 						break;
@@ -140,7 +198,6 @@ export class RedisManager extends BaseDatabaseProvider {
 						value = `[${keyType}]`;
 				}
 
-				const ttl = await redis.ttl(key);
 				rows.push({ key, type: keyType, value, ttl: ttl === -1 ? 'none' : ttl });
 			}
 

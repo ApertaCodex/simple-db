@@ -103,6 +103,26 @@ export class DatabaseExplorer {
     private readonly defaultPageSize = 20;
     private readonly TABLE_SETTINGS_KEY = 'simpleDB.tableSettings';
 
+    /**
+     * Sanitize data for webview postMessage: sanitize circular refs and
+     * truncate cell values that would cause RangeError on serialization.
+     */
+    private sanitizeForWebview(data: any[]): any[] {
+        const MAX_CELL = 100_000;
+        const sanitized = BaseDatabaseProvider.sanitizeRows(data);
+        return sanitized.map(row => {
+            const safeRow: Record<string, any> = {};
+            for (const [k, v] of Object.entries(row)) {
+                if (typeof v === 'string' && v.length > MAX_CELL) {
+                    safeRow[k] = v.substring(0, MAX_CELL) + '... [truncated]';
+                } else {
+                    safeRow[k] = v;
+                }
+            }
+            return safeRow;
+        });
+    }
+
     constructor(
         private providers: Map<DatabaseType, IDatabaseProvider>,
         private context: vscode.ExtensionContext
@@ -699,7 +719,7 @@ export class DatabaseExplorer {
 
                             panel.webview.postMessage({
                                 command: 'pageData',
-                                data: pageData,
+                                data: this.sanitizeForWebview(pageData),
                                 page: requestedPage,
                                 pageSize: requestedPageSize,
                                 totalRows: targetTotalRows
@@ -721,7 +741,7 @@ export class DatabaseExplorer {
 
                             panel.webview.postMessage({
                                 command: 'queryResult',
-                                data: result,
+                                data: Array.isArray(result) ? this.sanitizeForWebview(result) : result,
                                 rowCount: Array.isArray(result) ? result.length : 0
                             });
                         } catch (error) {
@@ -773,7 +793,7 @@ export class DatabaseExplorer {
 
                             panel.webview.postMessage({
                                 command: 'tableData',
-                                data: tableData,
+                                data: this.sanitizeForWebview(tableData),
                                 table: message.table,
                                 totalRows: tableRowCount,
                                 database: message.database
@@ -1288,11 +1308,37 @@ ${commonRules}
             tables: conn.tables
         }));
         
+        // Safely serialize data, truncating individual cell values that exceed
+        // this limit.  This prevents RangeError: Invalid string length that can
+        // occur when Redis (or any provider) returns extremely large values.
+        const MAX_CELL_LENGTH = 100_000;
+        const sanitizedData = BaseDatabaseProvider.sanitizeRows(data).map(row => {
+            const safeRow: Record<string, any> = {};
+            for (const [k, v] of Object.entries(row)) {
+                if (typeof v === 'string' && v.length > MAX_CELL_LENGTH) {
+                    safeRow[k] = v.substring(0, MAX_CELL_LENGTH) + '... [truncated]';
+                } else {
+                    safeRow[k] = v;
+                }
+            }
+            return safeRow;
+        });
+
+        let dataJson: string;
+        try {
+            dataJson = JSON.stringify(sanitizedData);
+        } catch (err) {
+            // If even sanitized data is too large to stringify, send empty
+            // and let the webview show an error message.
+            vscode.window.showErrorMessage(`Data too large to display (${(err as Error).message}). Try a smaller page size or use the query panel.`);
+            dataJson = '[]';
+        }
+
         // Inject initial data and configuration BEFORE the main script loads
         const initScript = `
             <script>
                 console.log('Injecting initial data...');
-                window.initialTableData = ${JSON.stringify(data)};
+                window.initialTableData = ${dataJson};
                 window.initialTableName = ${JSON.stringify(tableName)};
                 window.initialDatabaseName = ${JSON.stringify(databaseName)};
                 window.initialTotalRows = ${totalRows};
