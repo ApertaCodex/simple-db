@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV files in VS Code",
-    "version": "4.2.5",
+    "version": "4.2.8",
     "publisher": "apertacodex",
     "icon": "images/icon.png",
     "categories": [
