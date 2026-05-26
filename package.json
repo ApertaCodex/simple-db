@@ -2,7 +2,7 @@
     "name": "simple-db",
     "displayName": "Simple DB",
     "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV files in VS Code",
-    "version": "4.2.8",
+    "version": "4.3.0",
     "publisher": "apertacodex",
     "icon": "images/icon.png",
     "categories": [
@@ -436,7 +436,7 @@
         "build": "pnpm run compile && rm -f simple-db-*.vsix && vsce package && pnpm run install-ext",
         "install-ext": "code --install-extension simple-db-*.vsix --force 2>/dev/null; code-insiders --install-extension simple-db-*.vsix --force 2>/dev/null; true",
         "postinstall": "echo 'Skipping native builds during install. Run: pnpm rebuild @vscode/sqlite3 duckdb to build natives.'",
-        "version": "4.2.5"
+        "version": "4.3.0"
     },
     "pnpm": {
         "onlyBuiltDependencies": [
