@@ -230,6 +230,134 @@
             25% { transform: translateX(-5px); }
             75% { transform: translateX(5px); }
         }
+
+        /* ---------- JSON Document View (MongoDB Compass style) ---------- */
+        .json-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            background: #ffffff;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+            overflow: hidden;
+            transition: box-shadow 0.15s ease, border-color 0.15s ease;
+        }
+        .json-card:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border-color: #c7d2fe;
+        }
+        .dark .json-card {
+            background: #18181b;
+            border-color: #3f3f46;
+            box-shadow: none;
+        }
+        .dark .json-card:hover { border-color: #4f46e5; }
+
+        .json-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.4rem 0.75rem;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+        .dark .json-card-header {
+            background: #27272a;
+            border-bottom-color: #3f3f46;
+            color: #a1a1aa;
+        }
+        .json-card-header .json-card-actions {
+            display: flex;
+            gap: 0.25rem;
+        }
+        .json-card-header button {
+            background: transparent;
+            border: 0;
+            cursor: pointer;
+            color: inherit;
+            padding: 2px 4px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+        }
+        .json-card-header button:hover {
+            background: rgba(0,0,0,0.06);
+            color: #2563eb;
+        }
+        .dark .json-card-header button:hover {
+            background: rgba(255,255,255,0.08);
+            color: #93c5fd;
+        }
+
+        .json-card-body {
+            padding: 0.65rem 0.85rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12.5px;
+            line-height: 1.55;
+            color: #111827;
+            overflow-x: auto;
+            white-space: pre;
+        }
+        .dark .json-card-body { color: #e4e4e7; }
+
+        .json-line { display: block; }
+        .json-indent { display: inline-block; width: 1.25rem; }
+
+        .json-key { color: #0d47a1; font-weight: 600; }
+        .dark .json-key { color: #93c5fd; }
+        .json-string { color: #0f766e; }
+        .dark .json-string { color: #5eead4; }
+        .json-number { color: #b45309; }
+        .dark .json-number { color: #fbbf24; }
+        .json-boolean { color: #7c3aed; font-weight: 600; }
+        .dark .json-boolean { color: #c4b5fd; }
+        .json-null { color: #9ca3af; font-style: italic; }
+        .dark .json-null { color: #71717a; }
+        .json-punct { color: #6b7280; }
+        .dark .json-punct { color: #a1a1aa; }
+        .json-summary { color: #9ca3af; font-style: italic; margin-left: 0.25rem; }
+        .dark .json-summary { color: #71717a; }
+
+        .json-toggle {
+            cursor: pointer;
+            user-select: none;
+            display: inline-block;
+            width: 1rem;
+            color: #9ca3af;
+            transition: transform 0.15s ease;
+        }
+        .json-toggle:hover { color: #2563eb; }
+        .dark .json-toggle:hover { color: #93c5fd; }
+        .json-toggle.collapsed { transform: rotate(-90deg); }
+
+        .json-value-editable {
+            cursor: text;
+            border-radius: 3px;
+            padding: 0 2px;
+        }
+        .json-value-editable:hover {
+            background: rgba(59,130,246,0.1);
+            outline: 1px dashed #3b82f6;
+        }
+        .dark .json-value-editable:hover {
+            background: rgba(96,165,250,0.18);
+        }
+        .json-edit-input {
+            font: inherit;
+            color: inherit;
+            background: #fff;
+            border: 1px solid #3b82f6;
+            border-radius: 3px;
+            padding: 0 4px;
+            outline: none;
+            min-width: 60px;
+            box-shadow: 0 0 0 2px rgba(59,130,246,0.18);
+        }
+        .dark .json-edit-input {
+            background: #09090b;
+            color: #fafafa;
+            border-color: #60a5fa;
+        }
     </style>
 </head>
 
@@ -320,7 +448,17 @@
                 onclick="exportData()" title="Export CSV">
                 <span class="material-symbols-outlined text-lg">download</span>
             </button>
-            
+
+            <!-- View Mode Toggle (Table / JSON) -->
+            <button
+                class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                id="viewModeToggle"
+                onclick="toggleViewMode()"
+                title="Switch to JSON view">
+                <span class="material-symbols-outlined text-lg" id="viewModeIcon">data_object</span>
+                <span class="hidden sm:inline" id="viewModeText">JSON</span>
+            </button>
+
             <div class="h-6 w-px bg-gray-200 mx-1 dark:bg-zinc-800"></div>
             
             <!-- Edit Mode Toggle -->
@@ -415,7 +553,7 @@
     </div>
 
     <div class="flex-1 overflow-auto relative custom-scrollbar bg-white dark:bg-zinc-900">
-        <table class="w-full text-left border-collapse">
+        <table id="tableView" class="w-full text-left border-collapse">
             <thead
                 class="bg-gray-50 sticky top-0 z-10 shadow-sm text-xs uppercase text-gray-500 font-semibold tracking-wider dark:bg-zinc-800 dark:text-zinc-300 dark:shadow-black/50">
                 <tr id="tableHeaderRow">
@@ -426,6 +564,8 @@
             </tbody>
             </tbody>
         </table>
+
+        <div id="jsonView" class="hidden p-4 space-y-3"></div>
 
         <div class="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-zinc-500" id="emptyState">
             <span class="material-symbols-outlined text-6xl mb-2">upload_file</span>
@@ -537,7 +677,9 @@
             darkMode: false,
             editMode: false,
             currentEdit: null,
-            editHistory: []
+            editHistory: [],
+            viewMode: 'table', // 'table' | 'json'
+            jsonCollapsed: {} // per-row: { rowKey: Set<path> } collapsed paths
         };
 
         function getActiveDbName() {
@@ -692,7 +834,8 @@
                             table: currentTable,
                             visibleColumns: visibleColumns,
                             columnFilters: state.columnFilters,
-                            sortConfig: sortConfig
+                            sortConfig: sortConfig,
+                            viewMode: state.viewMode
                         });
                     }
                 }
@@ -1488,6 +1631,371 @@
             }).join('');
         }
 
+        // --- 7b. JSON Document View ---
+        function getCurrentPageSlice() {
+            if (isVSCodeWebview) {
+                return { pageData: filteredData, startIndex: (state.currentPage - 1) * state.rowsPerPage };
+            }
+            const start = (state.currentPage - 1) * state.rowsPerPage;
+            return { pageData: filteredData.slice(start, start + state.rowsPerPage), startIndex: start };
+        }
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderJsonValueHtml(value, path, isEditable) {
+            // path is dot-joined, used as id for collapsibles
+            if (value === null || value === undefined) {
+                return `<span class="json-null">null</span>`;
+            }
+            if (typeof value === 'boolean') {
+                const editAttr = isEditable ? ` data-edit-path="${escapeHtml(path)}" data-edit-type="boolean"` : '';
+                const cls = isEditable ? 'json-boolean json-value-editable' : 'json-boolean';
+                return `<span class="${cls}"${editAttr}>${value}</span>`;
+            }
+            if (typeof value === 'number') {
+                const editAttr = isEditable ? ` data-edit-path="${escapeHtml(path)}" data-edit-type="number"` : '';
+                const cls = isEditable ? 'json-number json-value-editable' : 'json-number';
+                return `<span class="${cls}"${editAttr}>${value}</span>`;
+            }
+            if (typeof value === 'string') {
+                const editAttr = isEditable ? ` data-edit-path="${escapeHtml(path)}" data-edit-type="string"` : '';
+                const cls = isEditable ? 'json-string json-value-editable' : 'json-string';
+                return `<span class="${cls}"${editAttr}>"${escapeHtml(value)}"</span>`;
+            }
+            if (Array.isArray(value)) {
+                if (value.length === 0) return `<span class="json-punct">[]</span>`;
+                return renderJsonContainer(value, path, '[', ']', true);
+            }
+            if (typeof value === 'object') {
+                const keys = Object.keys(value);
+                if (keys.length === 0) return `<span class="json-punct">{}</span>`;
+                return renderJsonContainer(value, path, '{', '}', false);
+            }
+            return `<span>${escapeHtml(String(value))}</span>`;
+        }
+
+        function renderJsonContainer(value, path, openCh, closeCh, isArray) {
+            // Containers are non-editable inline (top-level columns can still be edited via the table view textarea)
+            const isCollapsed = jsonIsCollapsed(path);
+            const summary = isArray
+                ? `Array(${value.length})`
+                : `${Object.keys(value).length} fields`;
+            const caret = `<span class="json-toggle material-symbols-outlined ${isCollapsed ? 'collapsed' : ''}" data-toggle-path="${escapeHtml(path)}" style="font-size: 14px; vertical-align: -2px;">expand_more</span>`;
+
+            if (isCollapsed) {
+                return `${caret}<span class="json-punct">${openCh}</span><span class="json-summary">${summary}</span><span class="json-punct">${closeCh}</span>`;
+            }
+
+            const entries = isArray
+                ? value.map((v, i) => ({ key: i, val: v, keyStr: String(i) }))
+                : Object.keys(value).map(k => ({ key: k, val: value[k], keyStr: k }));
+
+            const lines = entries.map((e, idx) => {
+                const childPath = `${path}.${e.keyStr}`;
+                const keyHtml = isArray
+                    ? ''
+                    : `<span class="json-key">"${escapeHtml(e.keyStr)}"</span><span class="json-punct">: </span>`;
+                const valHtml = renderJsonValueHtml(e.val, childPath, false);
+                const comma = idx < entries.length - 1 ? '<span class="json-punct">,</span>' : '';
+                return `<span class="json-line"><span class="json-indent"></span>${keyHtml}${valHtml}${comma}</span>`;
+            }).join('');
+
+            return `${caret}<span class="json-punct">${openCh}</span>` +
+                `<span class="json-block">${lines}</span>` +
+                `<span class="json-line"><span class="json-punct">${closeCh}</span></span>`;
+        }
+
+        function jsonRowKey(row, fallbackIdx) {
+            // Stable-ish key for collapse state across re-renders
+            try {
+                if (row && typeof row === 'object') {
+                    if ('id' in row) return `id:${row.id}`;
+                    if ('_id' in row) return `_id:${row._id}`;
+                }
+            } catch (e) {}
+            return `idx:${fallbackIdx}`;
+        }
+
+        function jsonIsCollapsed(path) {
+            return state._jsonCurrentCollapsed instanceof Set && state._jsonCurrentCollapsed.has(path);
+        }
+
+        function getCollapsedSet(rowKey) {
+            if (!state.jsonCollapsed[rowKey]) state.jsonCollapsed[rowKey] = new Set();
+            return state.jsonCollapsed[rowKey];
+        }
+
+        function renderJsonView() {
+            const container = document.getElementById('jsonView');
+            if (!container) return;
+
+            if (!filteredData || filteredData.length === 0) {
+                container.innerHTML = `<div class="text-center text-gray-400 dark:text-zinc-500 italic py-12">${db || isVSCodeWebview ? 'No records found.' : ''}</div>`;
+                return;
+            }
+
+            const { pageData, startIndex } = getCurrentPageSlice();
+            const editable = !!state.editMode && isVSCodeWebview;
+
+            const html = pageData.map((row, idx) => {
+                const rowIndex = startIndex + idx;
+                const displayIndex = rowIndex + 1;
+                const rowKey = jsonRowKey(row, rowIndex);
+                state._jsonCurrentCollapsed = getCollapsedSet(rowKey);
+
+                // Build top-level document body using visibleColumns ordering
+                const cols = (visibleColumns && visibleColumns.length) ? visibleColumns : Object.keys(row);
+                const lines = cols.map((col, i) => {
+                    const childPath = `${rowKey}.${col}`;
+                    const val = row[col];
+                    const keyHtml = `<span class="json-key">"${escapeHtml(col)}"</span><span class="json-punct">: </span>`;
+                    // Only allow editing of primitive top-level values inline.
+                    const isPrim = val === null || ['string', 'number', 'boolean'].includes(typeof val);
+                    const valHtml = renderJsonValueHtml(val, childPath, editable && isPrim);
+                    const comma = i < cols.length - 1 ? '<span class="json-punct">,</span>' : '';
+                    // For top-level non-primitive editable hint via column name (open table view textarea on column header click)
+                    const colEditAttr = (editable && !isPrim && val !== null && typeof val === 'object')
+                        ? ` data-edit-path="${escapeHtml(childPath)}" data-edit-type="object" data-edit-column="${escapeHtml(col)}"`
+                        : '';
+                    const wrapStart = colEditAttr ? `<span class="json-value-editable"${colEditAttr}>` : '';
+                    const wrapEnd = colEditAttr ? `</span>` : '';
+                    return `<span class="json-line"><span class="json-indent"></span>${keyHtml}${wrapStart}${valHtml}${wrapEnd}${comma}</span>`;
+                }).join('');
+
+                return (
+                    `<div class="json-card" data-row-index="${rowIndex}" data-row-key="${escapeHtml(rowKey)}">` +
+                        `<div class="json-card-header">` +
+                            `<span class="font-medium"># ${displayIndex}</span>` +
+                            `<div class="json-card-actions">` +
+                                `<button onclick="copyJsonDocument(${rowIndex})" title="Copy document">` +
+                                    `<span class="material-symbols-outlined" style="font-size:16px">content_copy</span>` +
+                                `</button>` +
+                                `<button onclick="toggleJsonCardCollapse(this)" title="Collapse / expand">` +
+                                    `<span class="material-symbols-outlined" style="font-size:18px">unfold_less</span>` +
+                                `</button>` +
+                            `</div>` +
+                        `</div>` +
+                        `<div class="json-card-body">` +
+                            `<span class="json-punct">{</span>` +
+                            `<span class="json-block">${lines}</span>` +
+                            `<span class="json-line"><span class="json-punct">}</span></span>` +
+                        `</div>` +
+                    `</div>`
+                );
+            }).join('');
+
+            state._jsonCurrentCollapsed = null;
+            container.innerHTML = html;
+
+            // Wire collapsible toggles
+            container.querySelectorAll('[data-toggle-path]').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const path = el.getAttribute('data-toggle-path');
+                    const card = el.closest('.json-card');
+                    if (!card) return;
+                    const rowKey = card.getAttribute('data-row-key');
+                    const set = getCollapsedSet(rowKey);
+                    if (set.has(path)) set.delete(path);
+                    else set.add(path);
+                    renderJsonView();
+                });
+            });
+
+            // Wire editable values
+            if (editable) {
+                container.querySelectorAll('.json-value-editable').forEach(el => {
+                    el.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        beginJsonEdit(el);
+                    });
+                });
+            }
+        }
+
+        function toggleJsonCardCollapse(btn) {
+            const card = btn.closest('.json-card');
+            if (!card) return;
+            const body = card.querySelector('.json-card-body');
+            if (!body) return;
+            body.classList.toggle('hidden');
+        }
+
+        function copyJsonDocument(rowIndex) {
+            const { pageData, startIndex } = getCurrentPageSlice();
+            const localIdx = rowIndex - startIndex;
+            const row = pageData[localIdx];
+            if (!row) return;
+            try {
+                const text = JSON.stringify(row, null, 2);
+                navigator.clipboard.writeText(text).then(() => {
+                    const toast = document.createElement('div');
+                    toast.className = 'fixed bottom-4 right-4 bg-green-600 text-white px-4 py-3 rounded shadow-lg z-50 flex items-center';
+                    toast.innerHTML = '<span class="material-symbols-outlined mr-2">check_circle</span> Document copied';
+                    document.body.appendChild(toast);
+                    setTimeout(() => toast.remove(), 1500);
+                });
+            } catch (e) { console.warn('Copy failed', e); }
+        }
+
+        function beginJsonEdit(el) {
+            if (state.currentEdit) cancelEdit();
+
+            const path = el.getAttribute('data-edit-path') || '';
+            const type = el.getAttribute('data-edit-type') || 'string';
+            const card = el.closest('.json-card');
+            if (!card) return;
+            const rowIndex = parseInt(card.getAttribute('data-row-index'), 10);
+
+            // Path format: "<rowKey>.<column>" — column is the second segment (top-level only)
+            const parts = path.split('.');
+            const columnName = parts[1];
+            if (!columnName) return;
+
+            const { pageData, startIndex } = getCurrentPageSlice();
+            const localIdx = rowIndex - startIndex;
+            const rowData = pageData[localIdx];
+            if (!rowData) return;
+
+            const originalValue = rowData[columnName];
+            const originalHTML = el.innerHTML;
+
+            if (type === 'object') {
+                // Open a readonly textarea, similar to table view behavior
+                openJsonObjectViewer(el, originalValue);
+                return;
+            }
+
+            // Build input
+            const input = document.createElement('input');
+            input.className = 'json-edit-input';
+            if (type === 'number') {
+                input.type = 'number';
+                input.step = 'any';
+                input.value = originalValue === null || originalValue === undefined ? '' : String(originalValue);
+            } else if (type === 'boolean') {
+                input.type = 'text';
+                input.value = String(originalValue);
+                input.setAttribute('list', 'json-bool-list');
+            } else {
+                input.type = 'text';
+                input.value = originalValue === null || originalValue === undefined ? '' : String(originalValue);
+            }
+
+            state.currentEdit = {
+                cell: el,
+                rowIndex: rowIndex,
+                columnName: columnName,
+                originalValue: originalValue === null || originalValue === undefined ? '' : String(originalValue),
+                originalHTML: originalHTML,
+                jsonEdit: true,
+                jsonType: type
+            };
+
+            el.innerHTML = '';
+            el.appendChild(input);
+            input.focus();
+            input.select();
+
+            const commit = () => {
+                let raw = input.value;
+                let newValue = raw;
+                if (type === 'number') {
+                    const n = Number(raw);
+                    if (!Number.isFinite(n)) { cancelEdit(); return; }
+                    newValue = n;
+                } else if (type === 'boolean') {
+                    const low = raw.trim().toLowerCase();
+                    if (low === 'true' || low === '1') newValue = true;
+                    else if (low === 'false' || low === '0') newValue = false;
+                    else { cancelEdit(); return; }
+                }
+                saveJsonEdit(newValue);
+            };
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commit(); }
+                else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+            });
+            input.addEventListener('blur', () => {
+                setTimeout(() => {
+                    if (state.currentEdit && state.currentEdit.cell === el) commit();
+                }, 100);
+            });
+        }
+
+        function openJsonObjectViewer(el, value) {
+            // Simple readonly modal-ish inline textarea (does not dispatch updateCell).
+            const originalHTML = el.innerHTML;
+            const wrap = document.createElement('div');
+            wrap.style.display = 'block';
+            wrap.style.margin = '4px 0';
+            const ta = document.createElement('textarea');
+            ta.readOnly = true;
+            ta.rows = 8;
+            ta.className = 'json-edit-input';
+            ta.style.width = '100%';
+            ta.style.whiteSpace = 'pre';
+            try { ta.value = JSON.stringify(value, null, 2); } catch { ta.value = String(value); }
+            const close = document.createElement('button');
+            close.className = 'mt-1 text-xs text-blue-600 dark:text-blue-400 underline';
+            close.textContent = 'Close';
+            close.onclick = () => { el.innerHTML = originalHTML; };
+            wrap.appendChild(ta);
+            wrap.appendChild(close);
+            el.innerHTML = '';
+            el.appendChild(wrap);
+            ta.focus();
+        }
+
+        function saveJsonEdit(newValue) {
+            if (!state.currentEdit) return;
+            const { cell, rowIndex, columnName, originalValue } = state.currentEdit;
+
+            const newAsString = typeof newValue === 'string' ? newValue : String(newValue);
+            if (newAsString === originalValue) { cancelEdit(); return; }
+
+            const { pageData } = getCurrentPageSlice();
+            const localIdx = rowIndex - ((state.currentPage - 1) * state.rowsPerPage);
+            const rowData = isVSCodeWebview ? filteredData[localIdx] : filteredData[rowIndex];
+            if (!rowData) { cancelEdit(); return; }
+
+            if (isVSCodeWebview && vscode) {
+                vscode.postMessage({
+                    command: 'updateCell',
+                    rowData: rowData,
+                    columnName: columnName,
+                    newValue: newValue,
+                    tableName: currentTableName,
+                    database: currentDbName
+                });
+
+                state.editHistory.push({
+                    rowIndex: rowIndex,
+                    columnName: columnName,
+                    oldValue: originalValue,
+                    newValue: newValue,
+                    timestamp: Date.now(),
+                    jsonEdit: true
+                });
+                state.currentEdit = null;
+
+                // Optimistic local update + re-render
+                if (rowData) rowData[columnName] = newValue;
+                renderJsonView();
+            } else {
+                showEditError(cell, 'Editing only supported in VSCode webview mode');
+                cancelEdit();
+            }
+        }
+
         // --- 8. Data Operations (Filter/Sort/Paginate) ---
         function handleSort(event, col) {
             const isShift = event.shiftKey;
@@ -1556,9 +2064,53 @@
         }
 
         function updateUI() {
-            renderHeader(); renderBody(); renderPagination(); updateTotalCount();
+            renderHeader();
+            renderBody();
+            renderJsonView();
+            renderPagination();
+            updateTotalCount();
+            applyViewMode();
             const badge = document.getElementById('filterBadge');
             if (badge) Object.keys(state.columnFilters).length > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden');
+        }
+
+        function applyViewMode() {
+            const tableEl = document.getElementById('tableView');
+            const jsonEl = document.getElementById('jsonView');
+            const btn = document.getElementById('viewModeToggle');
+            const icon = document.getElementById('viewModeIcon');
+            const text = document.getElementById('viewModeText');
+            if (!tableEl || !jsonEl || !btn) return;
+            if (state.viewMode === 'json') {
+                tableEl.classList.add('hidden');
+                jsonEl.classList.remove('hidden');
+                btn.classList.add('bg-blue-50', 'border-blue-300', 'text-blue-700');
+                btn.classList.remove('bg-white', 'border-gray-300', 'text-gray-700');
+                btn.title = 'Switch to table view';
+                if (icon) icon.textContent = 'table_rows';
+                if (text) text.textContent = 'Table';
+            } else {
+                tableEl.classList.remove('hidden');
+                jsonEl.classList.add('hidden');
+                btn.classList.remove('bg-blue-50', 'border-blue-300', 'text-blue-700');
+                btn.classList.add('bg-white', 'border-gray-300', 'text-gray-700');
+                btn.title = 'Switch to JSON view';
+                if (icon) icon.textContent = 'data_object';
+                if (text) text.textContent = 'JSON';
+            }
+        }
+
+        function toggleViewMode() {
+            // Cancel any in-progress cell edit before switching
+            if (state.currentEdit) cancelEdit();
+            state.viewMode = state.viewMode === 'json' ? 'table' : 'json';
+            applyViewMode();
+            if (state.viewMode === 'json') {
+                renderJsonView();
+            } else {
+                renderBody();
+            }
+            saveToCache();
         }
 
         function updateTotalCount() { document.getElementById('totalRecords').textContent = `${totalDatabaseRows} Records`; }
@@ -1796,6 +2348,7 @@
             
             // Re-render to apply/remove editable classes
             renderBody();
+            renderJsonView();
         }
 
         function enterEditMode(event, rowIndex, columnName) {
@@ -2118,13 +2671,19 @@
                                 setTableSettings(message.table, settingsDb, {
                                     visibleColumns: message.settings.visibleColumns,
                                     filters: message.settings.columnFilters,
-                                    sortConfig: message.settings.sortConfig
+                                    sortConfig: message.settings.sortConfig,
+                                    viewMode: message.settings.viewMode
                                 });
                             }
 
                             const isCurrentView = message.table === currentTableName && (!settingsDb || settingsDb === currentDbName);
                             if (isCurrentView && message.settings) {
                                 restoreTableState(message.table, settingsDb);
+                                if (message.settings.viewMode === 'table' || message.settings.viewMode === 'json') {
+                                    state.viewMode = message.settings.viewMode;
+                                    applyViewMode();
+                                    if (state.viewMode === 'json') renderJsonView();
+                                }
                             }
 
                             const pendingKey = getTableSettingsKey(settingsDb, message.table);
@@ -2192,6 +2751,7 @@
                             
                             // Re-render to show reverted value
                             renderBody();
+                            renderJsonView();
                         }
                         
                         // Show error toast
