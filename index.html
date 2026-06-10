@@ -1546,13 +1546,12 @@
                 const isFiltered = state.columnFilters[col];
 
                 return `
-                <th draggable="true"
-                    class="px-6 py-3 border-b border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-900 group hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors select-none cursor-pointer relative"
+                <th class="px-6 py-3 border-b border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-900 group hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors select-none cursor-pointer relative"
                     onclick="handleSort(event, '${col}')"
-                    ondragstart="handleDragStart(event, '${col}')" ondragover="handleDragOver(event, '${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '${col}')">
+                    ondragover="handleDragOver(event, '${col}')" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, '${col}')">
                     <div class="flex items-center justify-between">
                         <span class="whitespace-nowrap flex items-center gap-1 ${isSorted ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400'}">
-                            <span class="material-symbols-outlined text-gray-300 dark:text-zinc-700 text-sm cursor-grab active:cursor-grabbing mr-1 opacity-0 group-hover:opacity-100 transition-opacity">drag_indicator</span>
+                            <span draggable="true" ondragstart="handleDragStart(event, '${col}')" class="material-symbols-outlined text-gray-300 dark:text-zinc-700 text-sm cursor-grab active:cursor-grabbing mr-1 opacity-0 group-hover:opacity-100 transition-opacity">drag_indicator</span>
                             ${formatColumnName(col)}
                             ${isSorted ? `<span class="material-symbols-outlined text-sm font-bold">${sortDir === 'asc' ? 'arrow_upward' : 'arrow_downward'}</span>` : ''}
                             ${(isSorted && sortConfig.length > 1) ? `<span class="sort-badge">${sortIndex + 1}</span>` : ''}
