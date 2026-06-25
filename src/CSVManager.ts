@@ -222,12 +222,14 @@ export class CSVManager extends BaseDatabaseProvider {
 		return identifier;
 	}
 
-	async importFromJSON(connectionPath: string, _tableName: string, filePath: string): Promise<number> {
+	async importFromJSON(connectionPath: string, tableName: string, filePath: string): Promise<number> {
 		const content = await fs.promises.readFile(filePath, 'utf8');
-		const data = JSON.parse(content);
+		// CSV is a single-table file, so flatten all datasets into one row stream.
+		const datasets = BaseDatabaseProvider.parseJSONImport(content, tableName);
+		const data = datasets.flatMap(d => d.rows);
 
-		if (!Array.isArray(data) || data.length === 0) {
-			throw new Error('JSON file must contain a non-empty array of objects');
+		if (data.length === 0) {
+			throw new Error('JSON file contains no rows to import');
 		}
 
 		return this.appendToCSV(connectionPath, data);

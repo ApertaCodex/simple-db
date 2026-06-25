@@ -225,13 +225,13 @@ export class DuckDBManager extends BaseDatabaseProvider {
 
 	async importFromJSON(connectionPath: string, tableName: string, filePath: string): Promise<number> {
 		const content = await fs.promises.readFile(filePath, 'utf8');
-		const data = JSON.parse(content);
+		const datasets = BaseDatabaseProvider.parseJSONImport(content, tableName);
 
-		if (!Array.isArray(data) || data.length === 0) {
-			throw new Error('JSON file must contain a non-empty array of objects');
+		let total = 0;
+		for (const dataset of datasets) {
+			total += await this.importData(connectionPath, dataset.tableName, dataset.rows);
 		}
-
-		return this.importData(connectionPath, tableName, data);
+		return total;
 	}
 
 	async importFromCSV(connectionPath: string, tableName: string, filePath: string): Promise<number> {

@@ -13,7 +13,7 @@
 // ------------------------------------------------------------------
 // Database type union — extend this when adding new providers
 // ------------------------------------------------------------------
-export type DatabaseType = 'sqlite' | 'mongodb' | 'postgresql' | 'mysql' | 'redis' | 'libsql' | 'duckdb' | 'csv';
+export type DatabaseType = 'sqlite' | 'mongodb' | 'postgresql' | 'mysql' | 'redis' | 'libsql' | 'duckdb' | 'csv' | 'json';
 
 // ------------------------------------------------------------------
 // Shared data structures
@@ -141,6 +141,14 @@ export interface IDatabaseProvider {
 
 	/**
 	 * Import data from a JSON file into a table/collection.
+	 *
+	 * Supports two JSON shapes:
+	 *   - An array of objects `[{...}, {...}]` → imported into `tableName`.
+	 *   - An object mapping table names to arrays of objects
+	 *     `{ "users": [{...}], "orders": [{...}] }` → each key becomes its
+	 *     own table and `tableName` is ignored.
+	 *
+	 * @returns The total number of rows imported across all tables.
 	 */
 	importFromJSON(
 		connectionPath: string,

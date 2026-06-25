@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { logger } from './logger';
 import { BaseDatabaseProvider } from './BaseDatabaseProvider';
 import type { IDatabaseProvider, DatabaseItem, DatabaseType, TableSettings } from './types';
@@ -49,6 +50,7 @@ class DatabaseTreeItem extends vscode.TreeItem {
                     'LibSQL': { command: 'simpleDB.addLibSQL', title: 'Add LibSQL/Turso Connection', icon: 'libsql' },
                     'DuckDB': { command: 'simpleDB.addDuckDB', title: 'Add DuckDB Database', icon: 'duckdb' },
                     'CSV': { command: 'simpleDB.addCSV', title: 'Add CSV File', icon: 'csv' },
+                    'JSON': { command: 'simpleDB.addJSON', title: 'Add JSON File', icon: 'json' },
                 };
                 let matched = false;
                 for (const [keyword, entry] of Object.entries(actionCommandMap)) {
@@ -488,6 +490,37 @@ export class DatabaseExplorer {
         await this.addFileConnection(filePath, name, 'csv');
     }
 
+    async addJSON() {
+        const uri = await vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            filters: { 'JSON Files': ['json'] }
+        });
+
+        if (uri && uri[0]) {
+            const name = await vscode.window.showInputBox({
+                prompt: 'Enter connection name',
+                value: path.basename(uri[0].fsPath, path.extname(uri[0].fsPath))
+            });
+
+            if (name) {
+                await this.addFileConnection(uri[0].fsPath, name, 'json');
+            }
+        }
+    }
+
+    async openJSONFile(filePath: string) {
+        const existingConnection = this.connections.find(
+            conn => conn.type === 'json' && conn.path === filePath
+        );
+        if (existingConnection) {
+            vscode.window.showInformationMessage(`JSON file "${existingConnection.name}" is already open`);
+            this._treeDataProvider.refresh();
+            return;
+        }
+        const name = path.basename(filePath, path.extname(filePath));
+        await this.addFileConnection(filePath, name, 'json');
+    }
+
     private async addFileConnection(filePath: string, name: string, type: DatabaseType) {
         logger.info(`Adding ${type} connection: ${name} (${filePath})`);
         const connection: DatabaseItem = {
@@ -504,7 +537,13 @@ export class DatabaseExplorer {
         this.saveConnections();
         this._treeDataProvider.refresh();
         logger.info(`${type} "${name}" added successfully with ${connection.tables.length} tables`);
-        vscode.window.showInformationMessage(`${type === 'csv' ? 'CSV file' : 'DuckDB database'} "${name}" added successfully with ${connection.tables.length} tables`);
+        const fileLabelMap: Partial<Record<DatabaseType, string>> = {
+            csv: 'CSV file',
+            json: 'JSON file',
+            duckdb: 'DuckDB database'
+        };
+        const fileLabel = fileLabelMap[type] ?? `${type} file`;
+        vscode.window.showInformationMessage(`${fileLabel} "${name}" added successfully with ${connection.tables.length} tables`);
     }
 
     async refreshTables(connection: DatabaseItem) {
@@ -580,6 +619,13 @@ export class DatabaseExplorer {
                 canSelectFiles: true,
                 defaultUri: vscode.Uri.file(connection.path),
                 filters: { 'CSV Files': ['csv'] }
+            });
+            newPath = uri?.[0]?.fsPath;
+        } else if (connection.type === 'json') {
+            const uri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                defaultUri: vscode.Uri.file(connection.path),
+                filters: { 'JSON Files': ['json'] }
             });
             newPath = uri?.[0]?.fsPath;
         } else {
@@ -968,6 +1014,22 @@ export class DatabaseExplorer {
         }
     }
 
+    /**
+     * Peek at a JSON import file to determine whether it uses the
+     * multi-table shape (an object mapping table names to arrays of objects)
+     * vs. the single-table shape (a plain array of objects).
+     * Returns false on any parse error so the caller falls back to prompting.
+     */
+    private async jsonImportIsMultiTable(filePath: string): Promise<boolean> {
+        try {
+            const content = await fs.promises.readFile(filePath, 'utf8');
+            const parsed = JSON.parse(content);
+            return !Array.isArray(parsed) && parsed !== null && typeof parsed === 'object';
+        } catch {
+            return false;
+        }
+    }
+
     async importFromJSON(item: DatabaseTreeItem) {
         if (!item.connection) {
             vscode.window.showErrorMessage('No database connection available');
@@ -988,27 +1050,41 @@ export class DatabaseExplorer {
                 return;
             }
 
-            const tableName = await vscode.window.showInputBox({
-                prompt: 'Enter table name for imported data',
-                value: uri[0].fsPath.split('/').pop()?.replace('.json', '') || 'imported_data',
-                validateInput: (value) => {
-                    if (!value || value.trim().length === 0) {
-                        return 'Table name is required';
-                    }
-                    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
-                        return 'Table name must start with letter or underscore, and contain only letters, numbers, underscores';
-                    }
-                    return null;
-                }
-            });
+            // Detect the JSON shape. When the file is an object mapping table
+            // names to arrays of objects, the table names come from the keys
+            // and we skip the table-name prompt entirely.
+            const isMultiTable = await this.jsonImportIsMultiTable(uri[0].fsPath);
 
-            if (!tableName) {
-                return;
+            let tableName: string | undefined;
+            if (!isMultiTable) {
+                tableName = await vscode.window.showInputBox({
+                    prompt: 'Enter table name for imported data',
+                    value: uri[0].fsPath.split('/').pop()?.replace('.json', '') || 'imported_data',
+                    validateInput: (value) => {
+                        if (!value || value.trim().length === 0) {
+                            return 'Table name is required';
+                        }
+                        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
+                            return 'Table name must start with letter or underscore, and contain only letters, numbers, underscores';
+                        }
+                        return null;
+                    }
+                });
+
+                if (!tableName) {
+                    return;
+                }
             }
 
             const importProvider = this.getProvider(connection);
-            const rowCount = await importProvider.importFromJSON(connection.path, tableName, uri[0].fsPath);
-            vscode.window.showInformationMessage(`Imported ${rowCount} rows into table "${tableName}"`);
+            // For multi-table JSON, table names are derived from the object
+            // keys; pass a harmless fallback that won't be used.
+            const rowCount = await importProvider.importFromJSON(
+                connection.path,
+                tableName ?? 'imported_data',
+                uri[0].fsPath
+            );
+            vscode.window.showInformationMessage(`Imported ${rowCount} rows`);
 
             await this.refreshTables(connection);
             this._treeDataProvider.refresh();
@@ -1208,6 +1284,7 @@ export class DatabaseExplorer {
             case 'libsql':
             case 'duckdb':
             case 'csv':
+            case 'json':
                 return `You are a SQL expert. The user is currently viewing the "${tableName}" table. Convert their natural language query to SQL for this specific table.
 
 ${tableSchema}${sampleData}
@@ -1215,7 +1292,7 @@ ${tableSchema}${sampleData}
 Rules:
 - ALWAYS use the table "${tableName}" - the user is looking at this table right now
 ${commonRules}
-- Use proper ${dbType === 'duckdb' || dbType === 'csv' ? 'DuckDB' : 'SQLite'} syntax
+- Use proper ${dbType === 'duckdb' || dbType === 'csv' || dbType === 'json' ? 'DuckDB' : 'SQLite'} syntax
 - If the user asks to "show all", "get everything", use SELECT * FROM "${tableName}"
 - If the user mentions filtering, use WHERE clauses
 - If the user mentions sorting, use ORDER BY
@@ -1328,7 +1405,6 @@ ${commonRules}
 
         // Load the index.html file as webview
         const htmlPath = path.join(__dirname, '..', 'index.html');
-        const fs = require('fs');
         let html = fs.readFileSync(htmlPath, 'utf8');
         
         // Get all databases and tables for the dropdown (with counts)
@@ -1491,6 +1567,7 @@ class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeIt
                     new DatabaseTreeItem(null, 'Add LibSQL/Turso Connection', vscode.TreeItemCollapsibleState.None, 'actionButton'),
                     new DatabaseTreeItem(null, 'Add DuckDB Database', vscode.TreeItemCollapsibleState.None, 'actionButton'),
                     new DatabaseTreeItem(null, 'Add CSV File', vscode.TreeItemCollapsibleState.None, 'actionButton'),
+                    new DatabaseTreeItem(null, 'Add JSON File', vscode.TreeItemCollapsibleState.None, 'actionButton'),
                 ];
             }
             

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Add JSON files as a data source, mirroring CSV: a new "Add JSON File" toolbar
+  and empty-state button, an "Open JSON in Simple DB" right-click action for
+  `.json` files, and a `JSONManager` provider. Supports both shapes — a top-level
+  array of objects (single table named after the file) and an object mapping
+  table names to arrays of objects (one table per key). View, sort, page, edit,
+  import, export and the SQL Query panel (DuckDB-backed) all work on JSON files.
+- JSON import now supports multi-table objects: a JSON file shaped as
+  `{ "tableName": [ {...}, {...} ], ... }` imports each key as its own table,
+  in addition to the existing flat array-of-objects format. When a multi-table
+  object is detected, the table-name prompt is skipped and keys are used.
 
 ## [4.3.0] - 2026-05-26
 ### Added

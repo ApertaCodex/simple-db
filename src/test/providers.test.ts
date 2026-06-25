@@ -16,6 +16,7 @@ import * as path from 'path';
 import * as os from 'os';
 
 import type { IDatabaseProvider, DatabaseType } from '../types';
+import { BaseDatabaseProvider } from '../BaseDatabaseProvider';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,6 +50,7 @@ import { RedisManager } from '../RedisManager';
 import { LibSQLManager } from '../LibSQLManager';
 import { DuckDBManager } from '../DuckDBManager';
 import { CSVManager } from '../CSVManager';
+import { JSONManager } from '../JSONManager';
 
 // ---------------------------------------------------------------------------
 // Shared interface-conformance checks
@@ -190,6 +192,83 @@ describe('SQLiteManager', () => {
 		const rows = await provider.getTableData(dbPath, 'csv_test');
 		assert.equal(rows.length, 2);
 		assert.equal(rows[0].col_a, 'foo');
+	});
+
+	it('importFromJSON handles multi-table object (keys => tables)', async () => {
+		const fixture = writeFixture('multi.json', JSON.stringify({
+			products: [
+				{ sku: 'A1', name: 'Widget' },
+				{ sku: 'B2', name: 'Gadget' },
+			],
+			orders: [
+				{ id: '100', sku: 'A1' },
+			],
+		}));
+
+		const count = await provider.importFromJSON(dbPath, 'ignored_name', fixture);
+		assert.equal(count, 3);
+
+		const tables = await provider.getTableNames(dbPath);
+		assert.ok(tables.includes('products'));
+		assert.ok(tables.includes('orders'));
+
+		const products = await provider.getTableData(dbPath, 'products');
+		assert.equal(products.length, 2);
+		assert.ok(products.some((r: any) => r.name === 'Widget'));
+
+		const orders = await provider.getTableData(dbPath, 'orders');
+		assert.equal(orders.length, 1);
+		assert.equal(orders[0].sku, 'A1');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// parseJSONImport – shape detection unit tests
+// ---------------------------------------------------------------------------
+
+describe('BaseDatabaseProvider.parseJSONImport', () => {
+	it('parses a plain array of objects into a single dataset', () => {
+		const datasets = BaseDatabaseProvider.parseJSONImport(
+			JSON.stringify([{ a: 1 }, { a: 2 }]),
+			'defaultTable'
+		);
+		assert.equal(datasets.length, 1);
+		assert.equal(datasets[0].tableName, 'defaultTable');
+		assert.equal(datasets[0].rows.length, 2);
+	});
+
+	it('parses an object map into one dataset per key', () => {
+		const datasets = BaseDatabaseProvider.parseJSONImport(
+			JSON.stringify({ t1: [{ a: 1 }], t2: [{ b: 1 }, { b: 2 }] }),
+			'unused'
+		);
+		assert.equal(datasets.length, 2);
+		const byName = Object.fromEntries(datasets.map(d => [d.tableName, d.rows.length]));
+		assert.deepEqual(byName, { t1: 1, t2: 2 });
+	});
+
+	it('skips empty arrays in object map', () => {
+		const datasets = BaseDatabaseProvider.parseJSONImport(
+			JSON.stringify({ t1: [{ a: 1 }], empty: [] }),
+			'unused'
+		);
+		assert.equal(datasets.length, 1);
+		assert.equal(datasets[0].tableName, 't1');
+	});
+
+	it('throws on empty array', () => {
+		assert.throws(() => BaseDatabaseProvider.parseJSONImport('[]', 't'), /non-empty array/i);
+	});
+
+	it('throws on object map with no usable arrays', () => {
+		assert.throws(
+			() => BaseDatabaseProvider.parseJSONImport(JSON.stringify({ a: [] }), 't'),
+			/non-empty arrays/i
+		);
+	});
+
+	it('throws on invalid JSON', () => {
+		assert.throws(() => BaseDatabaseProvider.parseJSONImport('{not json', 't'), /Invalid JSON/i);
 	});
 });
 
@@ -672,5 +751,186 @@ describe('CSVManager', () => {
 
 		const lines = fs.readFileSync(outPath, 'utf8').split('\n').filter(Boolean);
 		assert.ok(lines.length >= 4); // header + 3 rows
+	});
+});
+
+// ---------------------------------------------------------------------------
+// JSONManager – full integration tests (file-based)
+// executeQuery uses DuckDB in-memory; everything else is pure JS.
+// ---------------------------------------------------------------------------
+
+describe('JSONManager', () => {
+	const provider = new JSONManager();
+	let arrayPath: string;   // single-table (array of objects)
+	let multiPath: string;   // multi-table (object of arrays)
+
+	before(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'simpledb-test-json-'));
+		arrayPath = tmpFile('people.json');
+		fs.writeFileSync(arrayPath, JSON.stringify([
+			{ id: 1, name: 'Alice', score: 95 },
+			{ id: 2, name: 'Bob', score: 87 },
+			{ id: 3, name: 'Charlie', score: 92 },
+		]), 'utf8');
+
+		multiPath = tmpFile('store.json');
+		fs.writeFileSync(multiPath, JSON.stringify({
+			users: [{ id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }],
+			orders: [{ oid: 10, total: 99.5 }],
+		}), 'utf8');
+	});
+
+	after(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	interfaceConformance('JSONManager', provider, 'json');
+
+	// --- array shape (single table named after the file) ---
+
+	it('getTableNames returns filename without extension for array shape', async () => {
+		const tables = await provider.getTableNames(arrayPath);
+		assert.deepEqual(tables, ['people']);
+	});
+
+	it('getRowCount returns correct count', async () => {
+		const count = await provider.getRowCount(arrayPath, 'people');
+		assert.equal(count, 3);
+	});
+
+	it('getTableData returns all rows', async () => {
+		const data = await provider.getTableData(arrayPath, 'people');
+		assert.equal(data.length, 3);
+		assert.ok(data.some((r: any) => r.name === 'Alice'));
+	});
+
+	it('getTableData respects limit and offset', async () => {
+		const page = await provider.getTableData(arrayPath, 'people', 2, 1);
+		assert.equal(page.length, 2);
+		assert.equal(page[0].name, 'Bob');
+	});
+
+	it('getTableData respects sortConfig', async () => {
+		const sorted = await provider.getTableData(arrayPath, 'people', 10, 0, [
+			{ col: 'name', dir: 'desc' },
+		]);
+		assert.equal(sorted[0].name, 'Charlie');
+	});
+
+	it('getTableData sorts numbers numerically', async () => {
+		const sorted = await provider.getTableData(arrayPath, 'people', 10, 0, [
+			{ col: 'score', dir: 'asc' },
+		]);
+		assert.deepEqual(sorted.map((r: any) => r.score), [87, 92, 95]);
+	});
+
+	it('getRecordIdentifier returns all columns', async () => {
+		const identifier = await provider.getRecordIdentifier(arrayPath, 'people', { id: 1, name: 'Alice', score: 95 });
+		assert.equal(Object.keys(identifier).length, 3);
+	});
+
+	it('updateRecord edits the matching row and writes back as an array', async () => {
+		const editPath = tmpFile('edit-array.json');
+		fs.writeFileSync(editPath, JSON.stringify([{ id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }]), 'utf8');
+
+		const result = await provider.updateRecord(editPath, 'edit-array', { id: 1 }, { name: 'Alicia' });
+		assert.equal(result.success, true);
+		assert.equal(result.affectedCount, 1);
+
+		const written = JSON.parse(fs.readFileSync(editPath, 'utf8'));
+		assert.ok(Array.isArray(written)); // shape preserved
+		assert.equal(written[0].name, 'Alicia');
+		assert.equal(written[1].name, 'Bob');
+	});
+
+	it('exportToJSON writes a valid JSON file', async () => {
+		const outPath = tmpFile('export-json.json');
+		const returned = await provider.exportToJSON(arrayPath, 'people', outPath);
+		assert.equal(returned, outPath);
+
+		const content = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+		assert.ok(Array.isArray(content));
+		assert.equal(content.length, 3);
+	});
+
+	it('exportToCSV writes a valid CSV file', async () => {
+		const outPath = tmpFile('export-json.csv');
+		const returned = await provider.exportToCSV(arrayPath, 'people', outPath);
+		assert.equal(returned, outPath);
+
+		const lines = fs.readFileSync(outPath, 'utf8').split('\n').filter(Boolean);
+		assert.ok(lines.length >= 4); // header + 3 rows
+	});
+
+	it('importFromCSV appends rows to the JSON file', async () => {
+		const targetPath = tmpFile('import-target.json');
+		fs.writeFileSync(targetPath, JSON.stringify([{ id: 1, name: 'Alice' }]), 'utf8');
+		const csvFixture = writeFixture('to-import.csv', 'id,name\n2,Bob\n3,Charlie\n');
+
+		const count = await provider.importFromCSV(targetPath, 'import-target', csvFixture);
+		assert.equal(count, 2);
+		assert.equal(await provider.getRowCount(targetPath, 'import-target'), 3);
+	});
+
+	// --- object shape (one table per key) ---
+
+	it('getTableNames returns keys for multi-table shape', async () => {
+		const tables = await provider.getTableNames(multiPath);
+		assert.deepEqual(tables.sort(), ['orders', 'users']);
+	});
+
+	it('getRowCount targets the named table', async () => {
+		assert.equal(await provider.getRowCount(multiPath, 'users'), 2);
+		assert.equal(await provider.getRowCount(multiPath, 'orders'), 1);
+	});
+
+	it('getTableData returns rows of the named table', async () => {
+		const orders = await provider.getTableData(multiPath, 'orders');
+		assert.equal(orders.length, 1);
+		assert.equal(orders[0].oid, 10);
+	});
+
+	it('importFromJSON multi-table file creates one table per key', async () => {
+		const targetPath = tmpFile('multi-import.json');
+		fs.writeFileSync(targetPath, JSON.stringify([]), 'utf8');
+		const fixture = writeFixture('multi-source.json', JSON.stringify({
+			a: [{ x: 1 }, { x: 2 }],
+			b: [{ y: 3 }],
+		}));
+
+		const total = await provider.importFromJSON(targetPath, 'unused', fixture);
+		assert.equal(total, 3);
+
+		const written = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+		assert.ok(!Array.isArray(written)); // promoted to object shape
+		assert.equal(written.a.length, 2);
+		assert.equal(written.b.length, 1);
+	});
+
+	it('updateRecord on multi-table writes back as object', async () => {
+		const editPath = tmpFile('edit-multi.json');
+		fs.writeFileSync(editPath, JSON.stringify({
+			users: [{ id: 1, name: 'Alice' }],
+			orders: [{ oid: 10, total: 99.5 }],
+		}), 'utf8');
+
+		const result = await provider.updateRecord(editPath, 'users', { id: 1 }, { name: 'Alicia' });
+		assert.equal(result.affectedCount, 1);
+
+		const written = JSON.parse(fs.readFileSync(editPath, 'utf8'));
+		assert.ok(!Array.isArray(written));
+		assert.equal(written.users[0].name, 'Alicia');
+		assert.equal(written.orders[0].oid, 10); // untouched
+	});
+
+	it('executeQuery runs SQL against array-shape table via DuckDB', async () => {
+		const result = await provider.executeQuery(arrayPath, 'SELECT name FROM people WHERE id = 1');
+		assert.equal(result.length, 1);
+		assert.equal(result[0].name, 'Alice');
+	});
+
+	it('executeQuery can join across multi-table keys via DuckDB', async () => {
+		const result = await provider.executeQuery(multiPath, 'SELECT COUNT(*) AS c FROM users');
+		assert.equal(Number(result[0].c), 2);
 	});
 });

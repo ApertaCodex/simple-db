@@ -189,13 +189,13 @@ export class PostgreSQLManager extends BaseDatabaseProvider {
 
 	async importFromJSON(connectionString: string, tableName: string, filePath: string): Promise<number> {
 		const content = await fs.promises.readFile(filePath, 'utf8');
-		const data = JSON.parse(content);
+		const datasets = BaseDatabaseProvider.parseJSONImport(content, tableName);
 
-		if (!Array.isArray(data) || data.length === 0) {
-			throw new Error('JSON file must contain a non-empty array of objects');
+		let total = 0;
+		for (const dataset of datasets) {
+			total += await this.importData(connectionString, dataset.tableName, dataset.rows);
 		}
-
-		return this.importData(connectionString, tableName, data);
+		return total;
 	}
 
 	async importFromCSV(connectionString: string, tableName: string, filePath: string): Promise<number> {

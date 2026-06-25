@@ -193,6 +193,63 @@ export abstract class BaseDatabaseProvider implements IDatabaseProvider {
 	}
 
 	/**
+	 * Normalize parsed JSON import content into one or more named datasets.
+	 *
+	 * Supports two shapes:
+	 *   1. Array of objects:
+	 *        [ {...}, {...} ]
+	 *      → a single dataset that uses `defaultTableName`.
+	 *
+	 *   2. Object mapping table names to arrays of objects:
+	 *        { "trades": [ {...}, {...} ], "users": [ {...} ] }
+	 *      → one dataset per key, using the key as the table name.
+	 *
+	 * Empty arrays are skipped. Throws if the content is not valid JSON
+	 * or does not match either supported shape.
+	 *
+	 * @returns Array of { tableName, rows } datasets.
+	 */
+	static parseJSONImport(
+		content: string,
+		defaultTableName: string
+	): Array<{ tableName: string; rows: any[] }> {
+		let parsed: any;
+		try {
+			parsed = JSON.parse(content);
+		} catch (error) {
+			throw new Error(`Invalid JSON file: ${(error as Error).message}`);
+		}
+
+		// Shape 1 — array of objects.
+		if (Array.isArray(parsed)) {
+			if (parsed.length === 0) {
+				throw new Error('JSON file must contain a non-empty array of objects');
+			}
+			return [{ tableName: defaultTableName, rows: parsed }];
+		}
+
+		// Shape 2 — object whose keys are table names and values are arrays of objects.
+		if (parsed && typeof parsed === 'object') {
+			const datasets: Array<{ tableName: string; rows: any[] }> = [];
+			for (const [key, value] of Object.entries(parsed)) {
+				if (Array.isArray(value) && value.length > 0) {
+					datasets.push({ tableName: key, rows: value });
+				}
+			}
+			if (datasets.length === 0) {
+				throw new Error(
+					'JSON object must map table names to non-empty arrays of objects'
+				);
+			}
+			return datasets;
+		}
+
+		throw new Error(
+			'JSON file must be an array of objects, or an object mapping table names to arrays of objects'
+		);
+	}
+
+	/**
 	 * Parse a CSV string into an array of objects.
 	 * The first row is treated as the header.
 	 */

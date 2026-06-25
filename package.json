@@ -1,8 +1,8 @@
 {
     "name": "simple-db",
     "displayName": "Simple DB",
-    "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV files in VS Code",
-    "version": "4.3.1",
+    "description": "View, sort, and filter SQLite, MongoDB, PostgreSQL, MySQL, Redis, LibSQL/Turso, DuckDB databases and CSV/JSON files in VS Code",
+    "version": "4.3.10",
     "publisher": "apertacodex",
     "icon": "images/icon.png",
     "categories": [
@@ -28,6 +28,7 @@
         "turso",
         "duckdb",
         "csv",
+        "json",
         "viewer",
         "data",
         "sql",
@@ -132,6 +133,14 @@
                 }
             },
             {
+                "command": "simpleDB.addJSON",
+                "title": "Add JSON File",
+                "icon": {
+                    "light": "icons/json.svg",
+                    "dark": "icons/json.svg"
+                }
+            },
+            {
                 "command": "simpleDB.refresh",
                 "title": "Refresh",
                 "icon": "$(refresh)"
@@ -183,6 +192,11 @@
                 "command": "simpleDB.openCSVFile",
                 "title": "Open CSV in Simple DB",
                 "icon": "$(table)"
+            },
+            {
+                "command": "simpleDB.openJSONFile",
+                "title": "Open JSON in Simple DB",
+                "icon": "$(json)"
             }
         ],
         "keybindings": [
@@ -267,6 +281,11 @@
                     "group": "navigation"
                 },
                 {
+                    "command": "simpleDB.addJSON",
+                    "when": "view == databaseExplorer",
+                    "group": "navigation"
+                },
+                {
                     "command": "simpleDB.refresh",
                     "when": "view == databaseExplorer",
                     "group": "navigation"
@@ -319,6 +338,11 @@
                     "command": "simpleDB.openCSVFile",
                     "when": "resourceExtname == .csv",
                     "group": "database"
+                },
+                {
+                    "command": "simpleDB.openJSONFile",
+                    "when": "resourceExtname == .json",
+                    "group": "database"
                 }
             ]
         },
@@ -367,7 +391,8 @@
                                     "redis",
                                     "libsql",
                                     "duckdb",
-                                    "csv"
+                                    "csv",
+                                    "json"
                                 ],
                                 "description": "Database type"
                             },
@@ -441,7 +466,8 @@
     "pnpm": {
         "onlyBuiltDependencies": [
             "@vscode/sqlite3",
-            "@vscode/vsce-sign"
+            "@vscode/vsce-sign",
+            "duckdb"
         ]
     },
     "devDependencies": {
@@ -453,10 +479,10 @@
     "dependencies": {
         "@libsql/client": "^0.17.3",
         "@vscode/sqlite3": "^5.1.12-vscode",
+        "duckdb": "^1.4.4",
         "ioredis": "^5.10.1",
         "mongoose": "^9.6.1",
         "mysql2": "^3.22.3",
-        "pg": "^8.20.0",
-        "duckdb": "^1.4.4"
+        "pg": "^8.20.0"
     }
 }

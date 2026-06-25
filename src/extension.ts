@@ -12,6 +12,7 @@ let RedisManagerModule: typeof import('./RedisManager') | null = null;
 let LibSQLManagerModule: typeof import('./LibSQLManager') | null = null;
 let DuckDBManagerModule: typeof import('./DuckDBManager') | null = null;
 let CSVManagerModule: typeof import('./CSVManager') | null = null;
+let JSONManagerModule: typeof import('./JSONManager') | null = null;
 let SQLiteEditorProviderModule: typeof import('./SQLiteEditorProvider') | null = null;
 
 // Provider registry — maps database type to its provider instance
@@ -62,6 +63,9 @@ async function getManagers() {
         if (!CSVManagerModule) {
             CSVManagerModule = await import('./CSVManager');
         }
+        if (!JSONManagerModule) {
+            JSONManagerModule = await import('./JSONManager');
+        }
 
         providerRegistry = new Map<DatabaseType, IDatabaseProvider>();
         providerRegistry.set('sqlite', new SQLiteManagerModule.SQLiteManager());
@@ -72,6 +76,7 @@ async function getManagers() {
         providerRegistry.set('libsql', new LibSQLManagerModule.LibSQLManager());
         providerRegistry.set('duckdb', new DuckDBManagerModule.DuckDBManager());
         providerRegistry.set('csv', new CSVManagerModule.CSVManager());
+        providerRegistry.set('json', new JSONManagerModule.JSONManager());
     }
 
     if (!DatabaseExplorerModule) {
@@ -219,6 +224,15 @@ export function activate(context: vscode.ExtensionContext) {
                 outputChannel.appendLine(`[${new Date().toISOString()}] addCSV error: ${error}`);
             }
         }),
+        vscode.commands.registerCommand('simpleDB.addJSON', async () => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                await databaseExplorer.addJSON();
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error adding JSON file: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] addJSON error: ${error}`);
+            }
+        }),
         vscode.commands.registerCommand('simpleDB.refresh', async () => {
             try {
                 const { databaseExplorer, treeDataProvider } = await getManagers();
@@ -334,6 +348,27 @@ export function activate(context: vscode.ExtensionContext) {
             } catch (error) {
                 vscode.window.showErrorMessage(`Error opening CSV file: ${error}`);
                 outputChannel.appendLine(`[${new Date().toISOString()}] openCSVFile error: ${error}`);
+            }
+        }),
+        vscode.commands.registerCommand('simpleDB.openJSONFile', async (uri) => {
+            try {
+                const { databaseExplorer } = await getManagers();
+                let fileUri: vscode.Uri | undefined;
+                if (Array.isArray(uri)) { fileUri = uri[0]; }
+                else if (uri) { fileUri = uri; }
+                if (!fileUri) {
+                    const selected = await vscode.window.showOpenDialog({
+                        canSelectFiles: true,
+                        filters: { 'JSON Files': ['json'] }
+                    });
+                    if (selected && selected[0]) { fileUri = selected[0]; }
+                }
+                if (fileUri) {
+                    await databaseExplorer.openJSONFile(fileUri.fsPath);
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error opening JSON file: ${error}`);
+                outputChannel.appendLine(`[${new Date().toISOString()}] openJSONFile error: ${error}`);
             }
         })
     ];
